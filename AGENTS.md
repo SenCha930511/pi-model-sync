@@ -61,7 +61,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 ## Code Conventions & Common Patterns
 
 - **Language of prose**: comments, JSDoc, README.md, and all user-facing strings (`notify`, command help/output, and config errors) are **English** — match when editing. Comments reference numbered design decisions (e.g. "decision 3", "decision 8"); keep that style, and use the existing box-drawing section dividers.
-- **Modules**: ESM; internal imports extensionless (`from "./config"`); Node builtins with `node:` prefix; the only external import is `import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent"` (type-only, host-provided, intentionally undeclared).
+- **Modules**: ESM; internal imports extensionless (`from "./config"`); Node builtins with `node:` prefix; the only external import is `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"` (type-only, erased at runtime so either host loads it; declared as a `peerDependencies` wildcard per the Pi packaging convention — never bundle it).
 - **Naming**: camelCase functions/vars; PascalCase types; `cmdList`/`cmdShow`/... prefix for command sub-handlers; SCREAMING_CASE only for constants like `USAGE`; verb-first helper names (`extractAgentName`, `resolveActiveLayer`).
 - **Host-facing types**: do NOT import host runtime types beyond `ExtensionAPI`. Extend the locally declared duck-typed interfaces (`ModelsFacade`, `ModelRegistryFacade`, `UiFacade`, `ExtensionContextLike`, `SubagentSpawnEvent`, `ToolCallEventLike`) and narrow `unknown` payloads with `typeof`/`in`/`Array.isArray` guards — never `any`.
 - **Error handling — two tiers**: spawn hook path uses try/catch and returns `undefined` (`readLayer` returns `{ config, error }` instead of throwing); command path surfaces `err.message` via the single `notify(ctx, msg)` helper. No `throw`, no `console.*`, no `process.exit` anywhere — all feedback goes through `ctx.ui.notify`.
@@ -86,7 +86,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 - **Runtime: Bun** — the omp host runs on Bun and executes the TypeScript sources directly; no build step, by design.
 - **Zero dependencies** — config.ts uses Node builtins only; there is no lockfile and no `node_modules`. Adding a dependency is a design change, not a routine edit.
 - Code uses **Node-compatible APIs only** (no `Bun.file`, Bun shell, or `import.meta`); keep new code on `node:` builtins so it stays host-portable.
-- `@oh-my-pi/pi-coding-agent` is an ambient host module; a standalone `tsc --noEmit` outside the omp environment cannot resolve it — that is expected, not an error to fix by adding deps.
+- `@earendil-works/pi-coding-agent` is an ambient host-supplied module on both hosts (omp forks the same `ExtensionAPI` surface); a standalone `tsc --noEmit` cannot resolve it — that is expected, not an error to fix by adding deps.
 
 ## Testing & QA
 

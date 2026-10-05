@@ -9,18 +9,37 @@ After the main model changes, **newly spawned/delegated** subagents switch to th
 
 ## Installation
 
-Pick one; ready to use immediately (Bun runs the TypeScript directly — no build, no dependencies):
+No build, no dependencies — both hosts run the TypeScript sources directly.
 
-1. Copy the whole directory to `~/.omp/agent/extensions/pi-model-sync/` (`package.json`'s `omp.extensions` points at `./index.ts`).
-2. Add to `~/.omp/agent/config.yml`:
+### omp
+
+```sh
+# from git (pin a tag for a fixed version)
+omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.2.0
+# or from npm (the same package feeds the Pi gallery)
+omp plugin install npm:@sencha930511/pi-model-sync
+```
+
+### upstream pi
+
+```sh
+# from npm (listed in the Pi package gallery at pi.dev/packages)
+pi install npm:@sencha930511/pi-model-sync
+# or straight from git
+pi install git:github.com/SenCha930511/pi-model-sync@v0.2.0
+```
+
+One-off trial without installing: `omp --extension /path/to/pi-model-sync` / `pi --extension /path/to/pi-model-sync` (`-e` is repeatable; `pi -e npm:@sencha930511/pi-model-sync` works too).
+
+### Local / offline
+
+1. Copy the whole directory to `~/.omp/agent/extensions/pi-model-sync/` (omp) or `~/.pi/agent/extensions/pi-model-sync/` (upstream pi); each `package.json` load key points at `./index.ts`.
+2. omp alternative: add to `~/.omp/agent/config.yml`:
 
    ```yaml
    extensions:
      - /path/to/pi-model-sync
    ```
-
-3. One-off load: `omp --extension /path/to/pi-model-sync`
-4. Upstream pi: copy the whole directory to `~/.pi/agent/extensions/pi-model-sync/` (`package.json`'s `pi.extensions` points at `./index.ts`), or one-off load with `pi --extension /path/to/pi-model-sync` (`-e` may be repeated to co-load other extensions).
 
 ## Config files
 

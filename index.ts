@@ -13,7 +13,9 @@
  * Everything else passes through untouched. Startup is fully silent (decision 6):
  * no session_start notification.
  */
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+// Type-only and erased at runtime; the upstream package name keeps npm/pi-gallery tooling happy,
+// while omp supplies the same ambient ExtensionAPI surface under either name.
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   configFileExists,
   findProfile,

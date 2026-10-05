@@ -1,9 +1,16 @@
 {
-  "name": "pi-model-sync",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@sencha930511/pi-model-sync",
+  "version": "0.2.0",
   "license": "MIT",
-  "description": "Route subagent models based on the spawning session model",
+  "description": "Route subagent models based on the spawning session model (omp & upstream pi, incl. pi-subagent)",
+  "keywords": ["pi-package", "pi-extension", "omp", "subagent", "model-routing"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SenCha930511/pi-model-sync.git"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
   "omp": { "extensions": ["./index.ts"] },
   "pi": { "extensions": ["./index.ts"] }
 }
