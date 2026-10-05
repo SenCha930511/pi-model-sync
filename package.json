@@ -2,6 +2,8 @@
   "name": "pi-model-sync",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Route subagent models based on the spawning session model",
-  "omp": { "extensions": ["./index.ts"] }
+  "omp": { "extensions": ["./index.ts"] },
+  "pi": { "extensions": ["./index.ts"] }
 }

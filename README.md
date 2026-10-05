@@ -1,33 +1,39 @@
 # pi-model-sync
 
-omp（oh my pi）擴充功能：依「發起 spawn 的 session 當下模型」自動改寫後續 subagent（task / eval agent() / workpool worker）使用的模型。
+An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Two delegation paths are supported:
 
-切換主模型後，**之後新 spawn** 的 subagent 依對應清單（profile）改用指定模型；執行中的 subagent 不會中途換模型。巢狀 spawn（subagent 再往下 spawn）也會攔截：查表鍵值是「發起 spawn 的 session 當下模型」。
+- omp native subagents (task / eval `agent()` / workpool workers).
+- The `subagent` tool of [pi-subagent](https://github.com/mjakl/pi-subagent) (`@mjakl/pi-subagent`), under both omp and upstream pi (pi-subagent itself requires Pi ≥ 0.87.1 or a compatible host).
 
-## 安裝
+After the main model changes, **newly spawned/delegated** subagents switch to the model mapped by the matching profile; running subagents never switch mid-flight. Nested spawns (a subagent spawning further subagents) are intercepted too: the lookup key is the spawning session's current model.
 
-三種方式任選一種，裝好即用（Bun 直接執行 TypeScript，免建置、免 dependency）：
+## Installation
 
-1. 複製整個目錄到 `~/.omp/agent/extensions/pi-model-sync/`（`package.json` 的 `omp.extensions` 會指向 `./index.ts`）。
-2. 在 `~/.omp/agent/config.yml` 加入：
+Pick one; ready to use immediately (Bun runs the TypeScript directly — no build, no dependencies):
+
+1. Copy the whole directory to `~/.omp/agent/extensions/pi-model-sync/` (`package.json`'s `omp.extensions` points at `./index.ts`).
+2. Add to `~/.omp/agent/config.yml`:
 
    ```yaml
    extensions:
      - /path/to/pi-model-sync
    ```
 
-3. 單次載入：`omp --extension /path/to/pi-model-sync`
+3. One-off load: `omp --extension /path/to/pi-model-sync`
+4. Upstream pi: copy the whole directory to `~/.pi/agent/extensions/pi-model-sync/` (`package.json`'s `pi.extensions` points at `./index.ts`), or one-off load with `pi --extension /path/to/pi-model-sync` (`-e` may be repeated to co-load other extensions).
 
-## 設定檔
+## Config files
 
-兩層設定，JSON 格式相同：
+Two layers, same JSON format:
 
-- **全域**：`~/.omp/agent/pi-model-sync.json`
-  - 環境變數 `PI_MODEL_SYNC_CONFIG` 可覆寫路徑（相對路徑以 cwd resolve）。
-  - `PI_CODING_AGENT_DIR` 存在時為 `<其值>/pi-model-sync.json`（優先序低於 `PI_MODEL_SYNC_CONFIG`）。
-- **專案**：`<repo>/.omp/pi-model-sync.json`（只看當下目錄，不往上找）
+- **Global**: `~/.omp/agent/pi-model-sync.json`
+  - `PI_MODEL_SYNC_CONFIG` overrides the path (relative paths resolve against cwd).
+  - When `PI_CODING_AGENT_DIR` is set: `<its value>/pi-model-sync.json` (lower precedence than `PI_MODEL_SYNC_CONFIG`).
+  - Dual-host landing: when none of the above applies, if the `~/.omp` file does **not** exist and `~/.pi/agent/pi-model-sync.json` does, the `.pi` path is used; when neither exists, the write target stays the `~/.omp` path.
+- **Project**: `<repo>/.omp/pi-model-sync.json` (current directory only, no upward search)
+  - Isomorphic fallback: when the `.omp` file does not exist and `<repo>/.pi/pi-model-sync.json` does, the `.pi` path is used.
 
-**專案檔存在時整份取代全域檔**（不做逐條合併；專案檔 JSON 壞掉時視為存在但無 profile）。
+**An existing project file wholly replaces the global file** (no per-key merge; a broken-JSON project file counts as "exists with no profiles").
 
 ```json
 {
@@ -47,34 +53,57 @@ omp（oh my pi）擴充功能：依「發起 spawn 的 session 當下模型」�
 }
 ```
 
-- `main`：要比對的主模型（比對規則見下）。
-- `subagents`：
-  - 字串 → 該 profile 下所有 agent 都用此模型；
-  - 物件 → key 為 agent 名稱（如 `task`、`scout`），`"*"` 為該 profile 的預設值。
-- selector 完整直通 host 解析：`provider/id`、裸 `id`、role alias（如 `@smol`）、`:level` 後綴（如 `openai/gpt-6-luna:high`）皆原字串交給 OMP 解析。
+- `main`: the main model to match (rules below).
+- `subagents`:
+  - a string → every agent under this profile uses that model;
+  - an object → keys are agent names (e.g. `task`, `scout`); `"*"` is the profile default.
+- Selectors pass through verbatim to host resolution: `provider/id`, bare `id`, role aliases (e.g. `@smol`), and `:level` suffixes (e.g. `openai/gpt-6-luna:high`) are handed to the host resolver as-is. Under upstream pi, see "pi-subagent routing rules" for validation semantics.
 
-## 比對規則
+## Matching rules
 
-- `main` 不含 `*` → 完全相等：等於 `provider/id` 或裸 `id`（不分大小寫）。
-- `main` 含 `*` → 明確 glob 萬用（`*` 可跨 `/`），對 `provider/id` 與裸 `id` 兩種形式比對。
-- 不做隱含 substring 比對；檔案順序**第一個命中勝出**。
+- `main` without `*` → exact equality against `provider/id` or bare `id` (case-insensitive).
+- `main` with `*` → explicit glob wildcard (`*` crosses `/`), tested against both the `provider/id` and bare `id` forms.
+- No implicit substring matching; the **first** match in file order wins.
 
-## /model-sync 指令
+## pi-subagent routing rules
 
-| 指令 | 說明 |
+The extension intercepts pi-subagent's `subagent` tool input `{calls: [{agent, prompt, model?, ...}]}` at `tool_call` time: when a call has no `model`, the spawning session's current model is matched against profile `main`, the call's `agent` name picks a selector (exact key first, then `"*"`; key matching is **case-sensitive** — align pi-subagent agent names with profile keys manually), and `call.model` is injected. All other fields (`prompt`, `thinking`, `cwd`, `session`, ...) are preserved.
+
+- **An explicit per-call `model` always wins** and is never overwritten. pi-subagent's own precedence is `call model → agent frontmatter model → parent model`; injection sits at the call-model layer, so an agent frontmatter `model` is overridden by profile routing — by design: the profile is the single source of "which model to use now".
+- Named-session continuations get injected too.
+- Shape guard: only a tool named `subagent` whose input carries a `calls` array is intercepted; other same-named tools with a different shape (e.g. nicobailon/pi-subagents) are not affected.
+- Under omp, selectors are fully validated via `ctx.models.resolve()`; under upstream pi they are tier-checked:
+  - `@alias` (an omp-only concept, unresolvable upstream) → unresolvable, no injection;
+  - a `:level` suffix (`off/minimal/low/medium/high/xhigh/max`) → stripped before validating the base;
+  - a glob containing `*` → passed through for the child process to resolve (a failure surfaces as an explicit error on that delegation);
+  - `provider/id` (split at the first `/`) → looked up via `modelRegistry.find`; a bare id → looked up in `modelRegistry.getAvailable()/getAll()`; no hit, no injection.
+- An unresolvable selector is not injected; pi-subagent's default routing (frontmatter → parent model) applies, with a one-time TUI warning (once per selector).
+- An injected selector must be resolvable by the **child process** itself: pi-subagent spawns an independent child (upstream pi or omp), whose model registration sources (e.g. `~/.pi/agent/models.json`) must know that selector.
+
+## /model-sync command
+
+| Command | Description |
 |---|---|
-| `/model-sync` 或 `/model-sync list` | 顯示生效層與所有 profile |
-| `/model-sync show` | 顯示目前模型、命中 profile 與 selector 解析狀態 |
-| `/model-sync add <main> <model>` | 新增/更新 profile（所有 subagent 用 `<model>`） |
-| `/model-sync set <main> <agent> <model>` | 設定特定 agent 的模型（`<agent>` 為 `*` 時設為該 profile 預設） |
-| `/model-sync remove <main> [agent]` | 移除整個 profile 或其中一個 agent 設定 |
+| `/model-sync` or `/model-sync list` | Show the active layer and all profiles |
+| `/model-sync show` | Show the current model, matched profile, and selector resolution status |
+| `/model-sync add <main> <model>` | Add/update a profile (all subagents use `<model>`) |
+| `/model-sync set <main> <agent> <model>` | Set a model for one agent (when `<agent>` is `*`, sets the profile default) |
+| `/model-sync remove <main> [agent]` | Remove a whole profile, or one agent entry |
 
-指令預設寫**全域**檔；任何子命令加上 `--project` 旗標改寫**專案**檔。也可直接手改 JSON 檔（以 mtime 快取偵測變更，存檔即生效）。
+Commands write to the **global** file by default; any subcommand with `--project` writes the **project** file. You can also edit the JSON directly (changes are detected via an mtime cache and take effect on save).
 
-## 注意事項
+## Notes
 
-- 執行中的 subagent 不會中途換模型；切換主模型只影響後續 spawn。
-- 巢狀 spawn 以「發起 spawn 的 session 當下模型」查表（child session 只拿得到自己的模型，這是 API 唯一乾淨做法）。僅在 host 允許深度 ≥2 的巢式 spawn 時發生；上限由 `task.maxRecursionDepth` 設定控制（OMP 文件預設 2、負值不設限），深度達上限時 subagent 的 task 工具會被移除而無法再往下 spawn。
-- profile 指定的 selector 無法解析時，該次 spawn 不攔截、走 OMP 原本路由，並在 TUI 一次性警告（每個 selector 只警告一次）。
-- 路由生效時，task 卡片 / Agent Hub 顯示 routing note：`pi-model-sync: <agent> → <model> (main: <main>)`。
-- 啟動完全安靜，不做任何 session 啟動通知。
+- Running subagents never switch mid-flight; switching the main model only affects later spawns.
+- Nested spawns resolve against the spawning session's current model (a child session only knows its own model — the only clean API). This happens only when the host allows nesting depth ≥ 2; the cap is governed by `task.maxRecursionDepth` (omp doc default 2, negative = unlimited); at the cap, the subagent's task tool is removed so it cannot spawn further.
+- When a profile selector is unresolvable, that spawn or delegation is not intercepted — default routing applies — and a warning shows once per selector in the TUI.
+- For omp-native spawns, when routing takes effect the task card / Agent Hub shows the routing note: `pi-model-sync: <agent> → <model> (main: <main>)`. pi-subagent delegations show the injected model in the call rendering instead — no extra note, by design.
+- Startup is fully silent: no session-start notification.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Review expectations and conventions live in [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE) © SenCha930511.

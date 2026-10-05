@@ -1,10 +1,17 @@
 /**
- * pi-model-sync — 依「發起 spawn 的 session 當下模型」路由 subagent 模型。
+ * pi-model-sync — routes subagent models from the spawning session's current model.
+ * Dual host: omp / upstream pi (decision 12).
  *
- * 於 before_subagent_spawn 查 profile 對應（含巢狀 spawn：事件在發起 session 觸發，
- * ctx.models.current() 即該 session 的模型）。命中且 selector 可解析時改寫 child 的
- * 模型（原 patterns 保留為 retry fallback chain）；其餘情況一律不攔截。
- * 啟動完全安靜（決策 6）：沒有 session_start 通知。
+ * Two interception paths:
+ * 1. omp native before_subagent_spawn: fires in the spawning session (nested spawns
+ *    included), where ctx.models.current() is that session's model; on a resolvable
+ *    profile hit, the child's model is rewritten (original patterns stay as the retry
+ *    fallback chain). Upstream pi lacks this event; a failed registration is skipped.
+ * 2. tool_call: intercepts @mjakl/pi-subagent's `subagent` tool — when a call carries
+ *    no model, a per-call model is injected from the same profile table; an explicit
+ *    per-call model always wins and is never overwritten (decision 11).
+ * Everything else passes through untouched. Startup is fully silent (decision 6):
+ * no session_start notification.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -20,12 +27,19 @@ import {
 } from "./config";
 import type { CurrentModelRef, ModelSyncConfig, Profile, SubagentMap } from "./config";
 
-/** 已警告過「無法解析」的 selector（每 selector 只警告一次）。 */
+/** Selectors already warned about as unresolvable (once per selector). */
 const warnedSelectors = new Set<string>();
 
 interface ModelsFacade {
   current(): unknown;
   resolve(spec: string): unknown;
+}
+
+/** Decision 13: duck type of upstream pi's ctx.modelRegistry (absent in omp; guard each method). */
+interface ModelRegistryFacade {
+  find?(provider: string, modelId: string): unknown;
+  getAvailable?(): unknown;
+  getAll?(): unknown;
 }
 
 interface UiFacade {
@@ -35,8 +49,19 @@ interface UiFacade {
 interface ExtensionContextLike {
   cwd: string;
   mode?: string;
-  models: ModelsFacade;
+  /** Provided by omp; upstream pi lacks it — fall back to model / modelRegistry there. */
+  models?: ModelsFacade;
+  /** Upstream pi's ctx.model: the current model (Model<any>-shaped, narrowed by toModelRef). */
+  model?: unknown;
+  /** Upstream pi's ctx.modelRegistry. */
+  modelRegistry?: ModelRegistryFacade;
   ui: UiFacade;
+}
+
+/** omp CustomToolCallEvent shape (upstream pi's tool_call event is isomorphic; only these two fields are used). */
+interface ToolCallEventLike {
+  toolName?: unknown;
+  input?: unknown;
 }
 
 interface SubagentSpawnEvent {
@@ -44,7 +69,18 @@ interface SubagentSpawnEvent {
   patterns?: unknown;
 }
 
-/** ctx.models.current() → 比對用 { provider, id }；無法辨識時回 undefined。 */
+/** Upstream pi's ThinkingLevel set (used to strip a selector `:level` suffix before validation). */
+const PI_THINKING_LEVELS: Record<string, true> = {
+  off: true,
+  minimal: true,
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true,
+};
+
+/** ctx.models.current() → { provider, id } for matching; undefined when unrecognizable. */
 function toModelRef(model: unknown): CurrentModelRef | undefined {
   if (!model || typeof model !== "object") return undefined;
   let id: string | undefined;
@@ -58,7 +94,84 @@ function toModelRef(model: unknown): CurrentModelRef | undefined {
   return { provider, id };
 }
 
-/** event.agent 形狀未在文件明示：字串或 { name }，都失敗時 fallback "task"。 */
+/** Decision 12: host-agnostic current-model lookup — omp via ctx.models.current(); upstream pi via ctx.model. */
+function currentModelRef(ctx: ExtensionContextLike): CurrentModelRef | undefined {
+  if (ctx.models && typeof ctx.models.current === "function") {
+    try {
+      return toModelRef(ctx.models.current());
+    } catch {
+      return undefined;
+    }
+  }
+  return toModelRef(ctx.model);
+}
+
+/** Narrow modelRegistry.getAvailable()/getAll() entries to { provider, id } (same guard as toModelRef). */
+function listRegistryModels(registry: ModelRegistryFacade): CurrentModelRef[] {
+  let raw: unknown;
+  if (typeof registry.getAvailable === "function") raw = registry.getAvailable();
+  if (!Array.isArray(raw) && typeof registry.getAll === "function") raw = registry.getAll();
+  if (!Array.isArray(raw)) return [];
+  const out: CurrentModelRef[] = [];
+  for (const entry of raw) {
+    const ref = toModelRef(entry);
+    if (ref) out.push(ref);
+  }
+  return out;
+}
+
+/**
+ * Decision 13: upstream pi has no ctx.models.resolve(); validate the selector in tiers
+ * against modelRegistry:
+ * 1. leading `@` is an omp-only alias → unresolvable;
+ * 2. strip a `:level` suffix matching upstream ThinkingLevel, then validate the base;
+ *    empty base → unresolvable;
+ * 3. contains `*` is a glob → pass through; the child process resolves it via minimatch
+ *    (a failure surfaces as an explicit error on that delegation);
+ * 4. `provider/id` → find() decides; without find, scan the list;
+ * 5. bare id → scan the list for a matching id.
+ */
+function piSelectorResolvable(selector: string, registry: ModelRegistryFacade): boolean {
+  if (selector.startsWith("@")) return false;
+  let base = selector;
+  const colon = base.lastIndexOf(":");
+  if (colon > 0 && PI_THINKING_LEVELS[base.slice(colon + 1)]) {
+    base = base.slice(0, colon);
+  }
+  if (!base) return false;
+  if (base.includes("*")) return true;
+  const slash = base.indexOf("/");
+  if (slash > 0) {
+    const provider = base.slice(0, slash);
+    const id = base.slice(slash + 1);
+    if (typeof registry.find === "function") {
+      return Boolean(registry.find(provider, id));
+    }
+    return listRegistryModels(registry).some((m) => m.provider === provider && m.id === id);
+  }
+  return listRegistryModels(registry).some((m) => m.id === base);
+}
+
+/**
+ * Decision 12/13: whether the selector resolves — omp via ctx.models.resolve(); upstream
+ * via modelRegistry; neither present → undefined (this host cannot pre-validate; pass
+ * through for the child process to resolve).
+ */
+function selectorResolvable(ctx: ExtensionContextLike, selector: string): boolean | undefined {
+  if (ctx.models && typeof ctx.models.resolve === "function") {
+    try {
+      return Boolean(ctx.models.resolve(selector));
+    } catch {
+      return false;
+    }
+  }
+  if (ctx.modelRegistry) {
+    return piSelectorResolvable(selector, ctx.modelRegistry);
+  }
+  return undefined;
+}
+
+/** event.agent shape isn't documented: a string or { name }; falls back to "task" when both fail. */
 function extractAgentName(event: SubagentSpawnEvent): string {
   const agent = event.agent;
   if (typeof agent === "string" && agent.trim()) return agent.trim();
@@ -81,47 +194,110 @@ function notify(ctx: ExtensionContextLike, message: string): void {
 }
 
 export default function modelSync(pi: ExtensionAPI): void {
-  pi.setLabel("Model Sync");
+  // Upstream pi's setLabel is (entryId, label)-shaped; skip when the omp usage is
+  // incompatible there — functionality is unaffected.
+  const setLabel = (pi as { setLabel?: (label: string) => void }).setLabel;
+  try {
+    setLabel?.("Model Sync");
+  } catch {
+    // Ignore: upstream pi's setLabel semantics differ.
+  }
 
-  // ── spawn 路由（決策 1、2、4、7、10）─────────────────────────────
-  pi.on("before_subagent_spawn", (event: SubagentSpawnEvent, ctx: ExtensionContextLike) => {
-    try {
-      const profile = findProfile(readConfig(ctx.cwd), toModelRef(ctx.models.current()));
-      if (!profile) return undefined;
-      const agentName = extractAgentName(event);
-      const selector = pickSubagentSelector(profile, agentName);
-      if (!selector) return undefined;
-      let resolved: unknown;
+  // ── spawn routing (decisions 1, 2, 4, 7, 10) ─────────────────────
+  // Upstream pi has no before_subagent_spawn event; a failed registration does not
+  // affect the tool_call path below.
+  try {
+    pi.on("before_subagent_spawn", (event: SubagentSpawnEvent, ctx: ExtensionContextLike) => {
       try {
-        resolved = ctx.models.resolve(selector);
-      } catch {
-        resolved = undefined;
-      }
-      if (!resolved) {
-        // 決策 4：解析失敗退回預設路由，TUI 一次性警告。
-        if (ctx.mode === "tui" && !warnedSelectors.has(selector)) {
-          warnedSelectors.add(selector);
-          notify(ctx, `pi-model-sync: selector "${selector}" 無法解析為可用模型，此 spawn 使用預設路由`);
+        const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
+        if (!profile) return undefined;
+        const agentName = extractAgentName(event);
+        const selector = pickSubagentSelector(profile, agentName);
+        if (!selector) return undefined;
+        const ok = selectorResolvable(ctx, selector);
+        if (ok === false) {
+          // Decision 4: unresolvable selectors fall back to default routing, warned once in the TUI.
+          if (ctx.mode === "tui" && !warnedSelectors.has(selector)) {
+            warnedSelectors.add(selector);
+            notify(ctx, `pi-model-sync: selector "${selector}" 無法解析為可用模型，此 spawn 使用預設路由`);
+          }
+          return undefined;
         }
-        return undefined;
+        const rawPatterns = event.patterns;
+        const basePatterns = Array.isArray(rawPatterns)
+          ? rawPatterns.filter((p): p is string => typeof p === "string")
+          : typeof rawPatterns === "string"
+            ? [rawPatterns]
+            : [];
+        const patterns = basePatterns.filter((p) => p !== selector);
+        return {
+          model: [selector, ...patterns],
+          note: `pi-model-sync: ${agentName} → ${selector} (main: ${profile.main})`,
+        };
+      } catch {
+        return undefined; // the spawn-interception path must never throw
       }
-      const rawPatterns = event.patterns;
-      const basePatterns = Array.isArray(rawPatterns)
-        ? rawPatterns.filter((p): p is string => typeof p === "string")
-        : typeof rawPatterns === "string"
-          ? [rawPatterns]
-          : [];
-      const patterns = basePatterns.filter((p) => p !== selector);
-      return {
-        model: [selector, ...patterns],
-        note: `pi-model-sync: ${agentName} → ${selector} (main: ${profile.main})`,
-      };
+    });
+  } catch {
+    // Upstream pi lacks this event; skip registration.
+  }
+
+  // ── pi-subagent routing (decision 11) ────────────────────────────
+  // @mjakl/pi-subagent's `subagent` tool spawns a child process per delegation under
+  // either host; here a per-call model is injected before the call runs. Dual write
+  // mechanisms: in-place mutation (upstream pi's revision channel) AND returning
+  // { input } (omp's revision channel — last-wins, and the revised input is revalidated
+  // against the tool schema; `model` is a legal optional field of pi-subagent, so it
+  // passes; upstream runtime ignores unknown result fields).
+  // Shape guard: only toolName === "subagent" with an input.calls array is matched, so
+  // same-named tools of a different shape are untouched; every other field (agent,
+  // prompt, ...) is preserved — only `model` is added. Named-session continuation calls
+  // are injected too, consistent with pi-subagent's doc: a parent model change affects
+  // their next call.
+  pi.on("tool_call", (event: ToolCallEventLike, ctx: ExtensionContextLike) => {
+    try {
+      if (event.toolName !== "subagent") return undefined;
+      const input = event.input;
+      if (!input || typeof input !== "object") return undefined;
+      // Guarded as an object above; every dynamic field (calls/agent/model...) is validated again field by field.
+      const inputRecord = input as Record<string, unknown>;
+      const calls = inputRecord.calls;
+      if (!Array.isArray(calls) || calls.length === 0) return undefined;
+      const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
+      if (!profile) return undefined;
+      let changed = false;
+      for (const call of calls) {
+        if (!call || typeof call !== "object") continue;
+        // Guarded as an object above; model/agent are typeof-validated before use.
+        const record = call as Record<string, unknown>;
+        // Decision 11: an explicit per-call model always wins and is never overwritten.
+        if (typeof record.model === "string" && record.model.trim()) continue;
+        const agentName = typeof record.agent === "string" ? record.agent.trim() : "";
+        if (!agentName) continue;
+        // exact key → "*" fallback; key matching is case-sensitive (existing semantics:
+        // agent names and profile keys are aligned by the user).
+        const selector = pickSubagentSelector(profile, agentName);
+        if (!selector) continue;
+        const ok = selectorResolvable(ctx, selector);
+        if (ok === false) {
+          // Same as decision 4: unresolvable → no injection; pi-subagent's default
+          // (frontmatter → parent model) applies; warned once in the TUI.
+          if (ctx.mode === "tui" && !warnedSelectors.has(selector)) {
+            warnedSelectors.add(selector);
+            notify(ctx, `pi-model-sync: selector "${selector}" 無法解析為可用模型，此 subagent 委派沿用預設模型`);
+          }
+          continue;
+        }
+        record.model = selector;
+        changed = true;
+      }
+      return changed ? { input } : undefined;
     } catch {
-      return undefined; // spawn 攔截路徑絕不丟例外
+      return undefined; // never throws — the same never-throw invariant as the native path
     }
   });
 
-  // ── /model-sync 指令（決策 5、9）────────────────────────────────
+  // ── /model-sync command (decisions 5, 9) ─────────────────────────
   const USAGE = [
     "pi-model-sync 指令：",
     "  /model-sync [list]                      顯示生效層與所有 profile",
@@ -129,7 +305,7 @@ export default function modelSync(pi: ExtensionAPI): void {
     "  /model-sync add <main> <model>          新增/更新 profile（所有 subagent 用 <model>）",
     "  /model-sync set <main> <agent> <model>  設定特定 agent 的模型（<agent> 為 * 時設為該 profile 預設）",
     "  /model-sync remove <main> [agent]       移除整個 profile 或其中一個 agent 設定",
-    "所有子命令皆可加 --project 旗標寫入專案層（<cwd>/.omp/pi-model-sync.json）；預設寫全域檔。",
+    "所有子命令皆可加 --project 旗標寫入專案層（<cwd>/.omp/pi-model-sync.json；.omp 檔不存在且 .pi 檔存在時改寫 .pi 側）；預設寫全域檔。",
   ].join("\n");
 
   pi.registerCommand("model-sync", {
@@ -191,7 +367,7 @@ export default function modelSync(pi: ExtensionAPI): void {
     }
   }
 
-  /** 讀 target 供寫入；檔案存在但壞掉時拒寫（避免蓋掉使用者手改一半的內容）。 */
+  /** Read target for writing; refuse to write when the file exists but is corrupt (avoids clobbering half-edited user content). */
   function loadForWrite(ctx: ExtensionContextLike, target: string): ModelSyncConfig | null {
     const layer = readLayer(target);
     if (layer.error && configFileExists(target)) {
@@ -289,7 +465,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       `pi-model-sync 生效層：${layer.layer === "project" ? "專案層（project）" : "全域層（global）"} — ${layer.path}`,
     );
     if (active.error) lines.push(active.error);
-    const modelRef = toModelRef(ctx.models.current());
+    const modelRef = currentModelRef(ctx);
     const hit = findProfile(active.config, modelRef);
     if (active.config.profiles.length === 0) {
       lines.push("尚無 profile（/model-sync add <main> <model>）");
@@ -312,15 +488,15 @@ export default function modelSync(pi: ExtensionAPI): void {
   }
 
   function resolveStatus(ctx: ExtensionContextLike, selector: string): string {
-    try {
-      return ctx.models.resolve(selector) ? "（可解析）" : "（無法解析）";
-    } catch {
-      return "（無法解析）";
-    }
+    // Decision 12/13, three states: validate via omp/models, via pi/modelRegistry tiers, or defer to the child process when neither exists.
+    const ok = selectorResolvable(ctx, selector);
+    if (ok === true) return "（可解析）";
+    if (ok === false) return "（無法解析）";
+    return "（此 host 無法預先驗證，交由子程序解析）";
   }
 
   function cmdShow(ctx: ExtensionContextLike): void {
-    const modelRef = toModelRef(ctx.models.current());
+    const modelRef = currentModelRef(ctx);
     const current = modelRef
       ? modelRef.provider
         ? `${modelRef.provider}/${modelRef.id}`
