@@ -74,7 +74,7 @@ omp（oh my pi）擴充功能：依「發起 spawn 的 session 當下模型」�
 ## 注意事項
 
 - 執行中的 subagent 不會中途換模型；切換主模型只影響後續 spawn。
-- 巢狀 spawn 以「發起 spawn 的 session 當下模型」查表（child session 只拿得到自己的模型，這是 API 唯一乾淨做法）。僅在 host 允許深度 >1 的巢狀 spawn 時發生；OMP 預設 task nesting depth 上限為 1，subagent 不會再往下 spawn。
+- 巢狀 spawn 以「發起 spawn 的 session 當下模型」查表（child session 只拿得到自己的模型，這是 API 唯一乾淨做法）。僅在 host 允許深度 ≥2 的巢式 spawn 時發生；上限由 `task.maxRecursionDepth` 設定控制（OMP 文件預設 2、負值不設限），深度達上限時 subagent 的 task 工具會被移除而無法再往下 spawn。
 - profile 指定的 selector 無法解析時，該次 spawn 不攔截、走 OMP 原本路由，並在 TUI 一次性警告（每個 selector 只警告一次）。
 - 路由生效時，task 卡片 / Agent Hub 顯示 routing note：`pi-model-sync: <agent> → <model> (main: <main>)`。
 - 啟動完全安靜，不做任何 session 啟動通知。
