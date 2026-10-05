@@ -82,6 +82,8 @@ The extension intercepts pi-subagent's `subagent` tool input `{calls: [{agent, p
 
 ## /model-sync command
 
+All command help, output, notifications, and config error messages are in English.
+
 | Command | Description |
 |---|---|
 | `/model-sync` or `/model-sync list` | Show the active layer and all profiles |

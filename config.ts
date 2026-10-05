@@ -101,7 +101,7 @@ export function readLayer(path: string): { config: ModelSyncConfig; error: strin
     mtimeMs = statSync(path).mtimeMs;
   } catch {
     layerCache.delete(path);
-    return { config: { profiles: [] }, error: `設定檔不存在：${path}` };
+    return { config: { profiles: [] }, error: `Config file not found: ${path}` };
   }
   const cached = layerCache.get(path);
   if (cached && cached.mtimeMs === mtimeMs) {
@@ -112,7 +112,7 @@ export function readLayer(path: string): { config: ModelSyncConfig; error: strin
   try {
     config = normalizeConfig(JSON.parse(readFileSync(path, "utf8")) as unknown);
   } catch (err) {
-    error = `設定檔無法解析（${path}）：${err instanceof Error ? err.message : String(err)}`;
+    error = `Could not parse config file (${path}): ${err instanceof Error ? err.message : String(err)}`;
   }
   layerCache.set(path, { mtimeMs, config, error });
   return { config: { profiles: [...config.profiles] }, error };

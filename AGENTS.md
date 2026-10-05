@@ -60,7 +60,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 
 ## Code Conventions & Common Patterns
 
-- **Language of prose**: comments, JSDoc, and README.md are **English**; `notify`/command UI strings stay **Traditional Chinese** (user-facing; the user communicates in zh-TW) — match when editing. Comments reference numbered design decisions (e.g. "decision 3", "decision 8"); keep that style, and use the existing box-drawing section dividers.
+- **Language of prose**: comments, JSDoc, README.md, and all user-facing strings (`notify`, command help/output, and config errors) are **English** — match when editing. Comments reference numbered design decisions (e.g. "decision 3", "decision 8"); keep that style, and use the existing box-drawing section dividers.
 - **Modules**: ESM; internal imports extensionless (`from "./config"`); Node builtins with `node:` prefix; the only external import is `import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent"` (type-only, host-provided, intentionally undeclared).
 - **Naming**: camelCase functions/vars; PascalCase types; `cmdList`/`cmdShow`/... prefix for command sub-handlers; SCREAMING_CASE only for constants like `USAGE`; verb-first helper names (`extractAgentName`, `resolveActiveLayer`).
 - **Host-facing types**: do NOT import host runtime types beyond `ExtensionAPI`. Extend the locally declared duck-typed interfaces (`ModelsFacade`, `ModelRegistryFacade`, `UiFacade`, `ExtensionContextLike`, `SubagentSpawnEvent`, `ToolCallEventLike`) and narrow `unknown` payloads with `typeof`/`in`/`Array.isArray` guards — never `any`.

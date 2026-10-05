@@ -8,8 +8,8 @@ directly on Bun).
 
 - Read `AGENTS.md` — it documents the architecture, invariants, and conventions
   that reviewers will hold you to (never-throwing interception paths, whole-file
-  project-over-global replacement, zero dependencies, English comments and docs,
-  Traditional Chinese notify/UI strings).
+  project-over-global replacement, zero dependencies, English comments, docs,
+  and notify/UI strings).
 - Open an issue (or start a discussion in your PR) for any design change. Adding
   a dependency is a design change, not a routine edit.
 
