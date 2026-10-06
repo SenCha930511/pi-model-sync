@@ -412,8 +412,10 @@ export default function modelSync(pi: ExtensionAPI): void {
     if (agent === "*") {
       profile.subagents = model;
     } else {
-      const map: SubagentMap =
-        typeof profile.subagents === "string" ? { "*": profile.subagents } : { ...profile.subagents };
+      // Null-prototype map (same hardening as normalizeConfig): an exotic agent name like
+      // "__proto__" must stay an own property instead of being coerced away on assignment.
+      const map: SubagentMap = Object.create(null) as SubagentMap;
+      Object.assign(map, typeof profile.subagents === "string" ? { "*": profile.subagents } : profile.subagents);
       map[agent] = model;
       profile.subagents = map;
     }
@@ -441,7 +443,8 @@ export default function modelSync(pi: ExtensionAPI): void {
         notify(ctx, `This profile has a single default model; use /model-sync remove ${main}`);
         return;
       }
-      if (!(agent in profile.subagents)) {
+      // Own-key check: inherited prototype members must not masquerade as removable entries.
+      if (!Object.hasOwn(profile.subagents, agent)) {
         notify(ctx, `Profile ${main} has no entry for agent "${agent}"`);
         return;
       }

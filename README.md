@@ -116,6 +116,17 @@ All command help, output, notifications, and config error messages are in Englis
 | `/model-sync set <main> <agent> <model>` | Set a model for one agent (when `<agent>` is `*`, sets the profile default) |
 | `/model-sync remove <main> [agent]` | Remove a whole profile, or one agent entry |
 
+## Updating
+
+No self-update machinery — the hosts' package managers own updates:
+
+| Installed via | Update with |
+|---|---|
+| `pi install npm:...` | `pi update --extensions` (or `pi update --all`) |
+| `pi install git:...@vX.Y.Z` | Pinned by ref: reinstall with a newer tag to move |
+| `omp plugin install npm:...` | `omp plugin upgrade pi-model-sync` |
+| `omp plugin install git:...` / copied directory | `git pull` / re-copy |
+
 Commands write to the **global** file by default; any subcommand with `--project` writes the **project** file. You can also edit the JSON directly (changes are detected via an mtime cache and take effect on save).
 
 ## Notes
