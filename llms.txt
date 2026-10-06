@@ -1,0 +1,33 @@
+# pi-model-sync
+
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents plus pi-subagent's `subagent` tool. Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+
+## Install (pick the user's host)
+
+- omp: `omp plugin install npm:@sencha930511/pi-model-sync`
+- upstream pi: `pi install npm:@sencha930511/pi-model-sync`
+- git, tag-pinned (either host): `omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.2.0` / `pi install git:github.com/SenCha930511/pi-model-sync@v0.2.0`
+- omp marketplace: `omp plugin marketplace add SenCha930511/omp-marketplace`, then `omp plugin install pi-model-sync@sencha930511`
+
+Verify after installing: start the host and run `/model-sync list` — it prints the active config layer and all profiles.
+
+## Minimal config
+
+Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` when the `~/.omp` file is absent), project `<repo>/.omp/pi-model-sync.json`; `PI_MODEL_SYNC_CONFIG` overrides the path.
+
+```json
+{
+  "profiles": [
+    { "main": "provider/main-model", "subagents": { "explore": "provider/child-model", "*": "provider/default" } }
+  ]
+}
+```
+
+`main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An explicit per-call `model` in a pi-subagent call is never overwritten.
+
+## Docs
+
+- [README](README.md): install variants, config schema, matching rules, pi-subagent routing rules, `/model-sync` commands, updating
+- [CONTRIBUTING](CONTRIBUTING.md)
+- [License](LICENSE): MIT
+- [Releases](https://github.com/SenCha930511/pi-model-sync/releases)

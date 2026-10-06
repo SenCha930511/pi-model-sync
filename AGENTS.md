@@ -78,6 +78,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 | `config.ts` | Config layer: path resolution, layer precedence, mtime cache, atomic `writeConfig`, `findProfile` matching, `pickSubagentSelector`, `normalizeConfig` |
 |`package.json`|Minimal manifest; `omp.extensions` / `pi.extensions: ["./index.ts"]` are the host load declarations|
 |`README.md`|Sole documentation (English): install, config schema, matching rules, command table — **update it with any behavior change**|
+|`llms.txt`|Agent-facing doc index (llmstxt.org convention): what the project is, install commands per host, minimal config — keep in sync with README when install/config changes|
 | `~/.omp/agent/pi-model-sync.json` | Global config (runtime artifact, not in repo) |
 | `<cwd>/.omp/pi-model-sync.json` | Project config (runtime artifact, replaces global wholesale) |
 

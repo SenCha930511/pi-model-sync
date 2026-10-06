@@ -46,6 +46,14 @@ One-off trial without installing: `omp --extension /path/to/pi-model-sync` / `pi
      - /path/to/pi-model-sync
    ```
 
+### Via your AI agent
+
+This repo ships an [`llms.txt`](llms.txt) index ([llmstxt.org](https://llmstxt.org) convention), so coding agents can discover the project and install it directly. Ask yours:
+
+> Install pi-model-sync for my omp (or pi) setup.
+
+The agent should run the host-matching command from the sections above, then verify with `/model-sync list`.
+
 ## Config files
 
 Two layers, same JSON format:
