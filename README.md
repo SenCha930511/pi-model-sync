@@ -1,5 +1,10 @@
 # pi-model-sync
 
+[![npm version](https://img.shields.io/npm/v/@sencha930511/pi-model-sync)](https://www.npmjs.com/package/@sencha930511/pi-model-sync)
+[![npm downloads](https://img.shields.io/npm/dm/@sencha930511/pi-model-sync)](https://www.npmjs.com/package/@sencha930511/pi-model-sync)
+[![GitHub stars](https://img.shields.io/github/stars/SenCha930511/pi-model-sync)](https://github.com/SenCha930511/pi-model-sync)
+[![License: MIT](https://img.shields.io/github/license/SenCha930511/pi-model-sync)](LICENSE)
+
 An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Two delegation paths are supported:
 
 - omp native subagents (task / eval `agent()` / workpool workers).
