@@ -1,6 +1,6 @@
 # pi-model-sync
 
-> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents plus pi-subagent's `subagent` tool. Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents, pi-subagent's `subagent` tool, and (omp only) the advisor model role via a profile `advisor` entry. Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
 
 ## Install (pick the user's host)
 
@@ -23,7 +23,7 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 }
 ```
 
-`main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An explicit per-call `model` in a pi-subagent call is never overwritten.
+`main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An explicit per-call `model` in a pi-subagent call is never overwritten. An `advisor` entry rewrites omp's `modelRoles.advisor` (hot-rebuilds the live advisor; omp only).
 
 ## Docs
 

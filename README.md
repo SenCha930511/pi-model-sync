@@ -5,10 +5,11 @@
 [![GitHub stars](https://img.shields.io/github/stars/SenCha930511/pi-model-sync)](https://github.com/SenCha930511/pi-model-sync)
 [![License: MIT](https://img.shields.io/github/license/SenCha930511/pi-model-sync)](LICENSE)
 
-An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Two delegation paths are supported:
+An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Three routing paths are supported:
 
 - omp native subagents (task / eval `agent()` / workpool workers).
 - The `subagent` tool of [pi-subagent](https://github.com/mjakl/pi-subagent) (`@mjakl/pi-subagent`), under both omp and upstream pi (pi-subagent itself requires Pi ≥ 0.87.1 or a compatible host).
+- omp's **advisor** role: the matched profile's `advisor` entry is applied to the host's advisor model role, so the paired advisor session follows the profile table too (omp only; upstream pi has no settings API for this).
 
 After the main model changes, **newly spawned/delegated** subagents switch to the model mapped by the matching profile; running subagents never switch mid-flight. Nested spawns (a subagent spawning further subagents) are intercepted too: the lookup key is the spawning session's current model.
 
@@ -89,6 +90,7 @@ Two layers, same JSON format:
 - `subagents`:
   - a string → every agent under this profile uses that model;
   - an object → keys are agent names (e.g. `task`, `scout`); `"*"` is the profile default.
+  - `advisor` is honored as omp's advisor model role (see "Advisor routing"); other model-role names (e.g. `plan`) match no spawnable agent and are inert.
 - Selectors pass through verbatim to host resolution: `provider/id`, bare `id`, role aliases (e.g. `@smol`), and `:level` suffixes (e.g. `openai/gpt-6-luna:high`) are handed to the host resolver as-is. Under upstream pi, see "pi-subagent routing rules" for validation semantics.
 
 ## Matching rules
@@ -111,6 +113,17 @@ The extension intercepts pi-subagent's `subagent` tool input `{calls: [{agent, p
   - `provider/id` (split at the first `/`) → looked up via `modelRegistry.find`; a bare id → looked up in `modelRegistry.getAvailable()/getAll()`; no hit, no injection.
 - An unresolvable selector is not injected; pi-subagent's default routing (frontmatter → parent model) applies, with a one-time TUI warning (once per selector).
 - An injected selector must be resolvable by the **child process** itself: pi-subagent spawns an independent child (upstream pi or omp), whose model registration sources (e.g. `~/.pi/agent/models.json`) must know that selector.
+
+## Advisor routing (omp)
+
+omp's advisor is a paired session, not a spawnable subagent — neither delegation path can intercept it. When the matched profile has an `advisor` entry, the extension applies it through omp's exported settings singleton (`settings.setModelRole("advisor", ...)`):
+
+- Checked on `session_start` and every `turn_start` (compared first; a same-value call is a no-op), covering both new sessions and mid-session `/model` switches.
+- omp persists the value per-role into `config.yml` (`modelRoles.advisor`) and hot-rebuilds the live advisor — no restart needed.
+- Removing the `advisor` entry from the profile stops management; the role keeps its last value until you reset it (e.g. back to `"@default"`).
+- Only the main session writes the role; subagent sessions never touch it.
+- Upstream pi exports no settings API — the entry is skipped there with a one-time TUI warning.
+- When routing takes effect, a notification shows: `pi-model-sync: advisor → <model> (main: <main>)`.
 
 ## /model-sync command
 
@@ -143,7 +156,8 @@ Commands write to the **global** file by default; any subcommand with `--project
 - Nested spawns resolve against the spawning session's current model (a child session only knows its own model — the only clean API). This happens only when the host allows nesting depth ≥ 2; the cap is governed by `task.maxRecursionDepth` (omp doc default 2, negative = unlimited); at the cap, the subagent's task tool is removed so it cannot spawn further.
 - When a profile selector is unresolvable, that spawn or delegation is not intercepted — default routing applies — and a warning shows once per selector in the TUI.
 - For omp-native spawns, when routing takes effect the task card / Agent Hub shows the routing note: `pi-model-sync: <agent> → <model> (main: <main>)`. pi-subagent delegations show the injected model in the call rendering instead — no extra note, by design.
-- Startup is fully silent: no session-start notification.
+- Advisor routing rewrites `modelRoles.advisor` in `config.yml` while a profile `advisor` entry is active; that line is plugin-managed state, not a hand-edited value.
+- Startup is fully silent: no session-start notification (the advisor path only notifies when it actually changes the role).
 
 ## Contributing
 

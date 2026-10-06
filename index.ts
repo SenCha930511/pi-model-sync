@@ -2,7 +2,7 @@
  * pi-model-sync — routes subagent models from the spawning session's current model.
  * Dual host: omp / upstream pi (decision 12).
  *
- * Two interception paths:
+ * Three interception paths:
  * 1. omp native before_subagent_spawn: fires in the spawning session (nested spawns
  *    included), where ctx.models.current() is that session's model; on a resolvable
  *    profile hit, the child's model is rewritten (original patterns stay as the retry
@@ -10,8 +10,14 @@
  * 2. tool_call: intercepts @mjakl/pi-subagent's `subagent` tool — when a call carries
  *    no model, a per-call model is injected from the same profile table; an explicit
  *    per-call model always wins and is never overwritten (decision 11).
+ * 3. advisor role routing (decision 14): omp's advisor is a paired session, not a
+ *    spawnable subagent, so neither spawn path reaches it. The profile's "advisor"
+ *    entry is applied through omp's exported settings singleton (setModelRole), which
+ *    persists per-role and hot-rebuilds the live advisor. Upstream pi exports no
+ *    settings API; the entry is skipped there with a one-time warning.
  * Everything else passes through untouched. Startup is fully silent (decision 6):
- * no session_start notification.
+ * no session_start notification — the advisor path only notifies on an actual
+ * role change.
  */
 // Type-only and erased at runtime; the upstream package name keeps npm/pi-gallery tooling happy,
 // while omp supplies the same ambient ExtensionAPI surface under either name.
@@ -31,6 +37,23 @@ import type { CurrentModelRef, ModelSyncConfig, Profile, SubagentMap } from "./c
 
 /** Selectors already warned about as unresolvable (once per selector). */
 const warnedSelectors = new Set<string>();
+
+/** Duck type of omp's exported `settings` singleton (upstream pi exports no equivalent). */
+interface SettingsFacade {
+  setModelRole?(role: string, modelId: string): void;
+  getModelRoles?(): Record<string, string>;
+}
+
+/** omp's ctx.agent per-session identity; upstream pi contexts lack it. */
+interface AgentIdentityLike {
+  kind?: unknown;
+}
+
+/** Cached omp settings-singleton lookup (decision 14; shared across sessions). */
+let hostSettingsLoader: Promise<SettingsFacade | undefined> | undefined;
+
+/** One-time flag for the missing-host-API warning on the advisor path. */
+let warnedAdvisorHostApi = false;
 
 interface ModelsFacade {
   current(): unknown;
@@ -57,6 +80,8 @@ interface ExtensionContextLike {
   model?: unknown;
   /** Upstream pi's ctx.modelRegistry. */
   modelRegistry?: ModelRegistryFacade;
+  /** omp's per-session agent identity (kind "main" vs "sub"); gates main-session-only logic. */
+  agent?: AgentIdentityLike;
   ui: UiFacade;
 }
 
@@ -195,6 +220,61 @@ function notify(ctx: ExtensionContextLike, message: string): void {
   ctx.ui.notify(message, "info");
 }
 
+/** Type guard for the duck-typed settings facade (setModelRole is the required member). */
+function isSettingsFacade(value: unknown): value is SettingsFacade {
+  if (!value || typeof value !== "object") return false;
+  // Guarded as an object above; the method is typeof-validated before use.
+  const record = value as Record<string, unknown>;
+  return typeof record.setModelRole === "function";
+}
+
+/**
+ * Decision 14: load omp's exported `settings` singleton. Dynamic and feature-detected:
+ * upstream pi has no `settings` export, and a static named import would fail at link
+ * time there, breaking the whole extension on that host. Cached module-globally.
+ */
+function loadHostSettings(): Promise<SettingsFacade | undefined> {
+  hostSettingsLoader ??= import("@earendil-works/pi-coding-agent")
+    .then((mod: { settings?: unknown }) => (isSettingsFacade(mod.settings) ? mod.settings : undefined))
+    .catch(() => undefined);
+  return hostSettingsLoader;
+}
+
+/**
+ * Decision 14: advisor role routing. The advisor is a paired session, not a spawnable
+ * subagent, so neither interception path reaches it; instead the matched profile's
+ * "advisor" entry is applied to the host's advisor model role. omp's setModelRole
+ * persists the value per-role into the global config.yml and hot-rebuilds the live
+ * advisor (cfgModelRoles listener); a same-value call is a no-op, so running this on
+ * session_start plus every turn_start is cheap and covers mid-session main-model
+ * switches. Main session only — subagent sessions share this factory but must not
+ * touch the global role. No "advisor" entry or no host settings API → role untouched.
+ */
+async function syncAdvisorRole(ctx: ExtensionContextLike): Promise<void> {
+  try {
+    // Subagent and advisor sessions run the same factory; only the main session owns the role.
+    if (ctx.agent && ctx.agent.kind !== "main") return;
+    const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
+    if (!profile) return;
+    const selector = pickSubagentSelector(profile, "advisor");
+    if (!selector) return;
+    const settings = await loadHostSettings();
+    if (!settings) {
+      if (ctx.mode === "tui" && !warnedAdvisorHostApi) {
+        warnedAdvisorHostApi = true;
+        notify(ctx, `pi-model-sync: this host has no settings API; the advisor entry of profile ${profile.main} is not applied`);
+      }
+      return;
+    }
+    const current = settings.getModelRoles?.()["advisor"];
+    if (current === selector) return;
+    settings.setModelRole?.("advisor", selector);
+    notify(ctx, `pi-model-sync: advisor → ${selector} (main: ${profile.main})`);
+  } catch {
+    // Same never-throw invariant as the spawn path.
+  }
+}
+
 export default function modelSync(pi: ExtensionAPI): void {
   // Upstream pi's setLabel is (entryId, label)-shaped; skip when the omp usage is
   // incompatible there — functionality is unaffected.
@@ -298,6 +378,20 @@ export default function modelSync(pi: ExtensionAPI): void {
       return undefined; // never throws — the same never-throw invariant as the native path
     }
   });
+
+  // ── advisor role routing (decision 14) ───────────────────────────
+  // session_start covers a fresh session's model; turn_start covers mid-session
+  // /model switches (syncAdvisorRole compares and no-ops when unchanged). Each
+  // registration is independent so a host lacking one event keeps the other.
+  for (const eventName of ["session_start", "turn_start"] as const) {
+    try {
+      pi.on(eventName, (_event: unknown, ctx: ExtensionContextLike) => {
+        void syncAdvisorRole(ctx);
+      });
+    } catch {
+      // Host lacks this event; skip registration.
+    }
+  }
 
   // ── /model-sync command (decisions 5, 9) ─────────────────────────
   const USAGE = [
