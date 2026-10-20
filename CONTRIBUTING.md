@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for your interest in pi-model-sync. The project is intentionally small:
-six files, zero dependencies, no build step (the hosts run the TypeScript sources
+nine files, zero dependencies, no build step (the hosts run the TypeScript sources
 directly on Bun).
 
 ## Before you start

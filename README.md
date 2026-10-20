@@ -20,7 +20,7 @@ No build, no dependencies — both hosts run the TypeScript sources directly.
 
 ```sh
 # from git (pin a tag for a fixed version)
-omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.2.0
+omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.3.0
 # or from npm (the same package feeds the Pi gallery)
 omp plugin install npm:@sencha930511/pi-model-sync
 ```
@@ -31,7 +31,7 @@ omp plugin install npm:@sencha930511/pi-model-sync
 # from npm (listed in the Pi package gallery at pi.dev/packages)
 pi install npm:@sencha930511/pi-model-sync
 # or straight from git
-pi install git:github.com/SenCha930511/pi-model-sync@v0.2.0
+pi install git:github.com/SenCha930511/pi-model-sync@v0.3.0
 ```
 
 One-off trial without installing: `omp --extension /path/to/pi-model-sync` / `pi --extension /path/to/pi-model-sync` (`-e` is repeatable; `pi -e npm:@sencha930511/pi-model-sync` works too).
@@ -59,7 +59,7 @@ The agent should run the host-matching command from the sections above, then ver
 Two layers, same JSON format:
 
 - **Global**: `~/.omp/agent/pi-model-sync.json`
-  - `PI_MODEL_SYNC_CONFIG` overrides the path (relative paths resolve against cwd).
+  - `PI_MODEL_SYNC_CONFIG` overrides the path (relative paths resolve against the session cwd).
   - When `PI_CODING_AGENT_DIR` is set: `<its value>/pi-model-sync.json` (lower precedence than `PI_MODEL_SYNC_CONFIG`).
   - Dual-host landing: when none of the above applies, if the `~/.omp` file does **not** exist and `~/.pi/agent/pi-model-sync.json` does, the `.pi` path is used; when neither exists, the write target stays the `~/.omp` path.
 - **Project**: `<repo>/.omp/pi-model-sync.json` (current directory only, no upward search)
@@ -121,8 +121,10 @@ All command help, output, notifications, and config error messages are in Englis
 | `/model-sync` or `/model-sync list` | Show the active layer and all profiles |
 | `/model-sync show` | Show the current model, matched profile, and selector resolution status |
 | `/model-sync add <main> <model>` | Add/update a profile (all subagents use `<model>`) |
-| `/model-sync set <main> <agent> <model>` | Set a model for one agent (when `<agent>` is `*`, sets the profile default) |
+| `/model-sync set <main> <agent> <model>` | Set a model for one agent (`*` sets/updates the profile default while keeping per-agent entries) |
 | `/model-sync remove <main> [agent]` | Remove a whole profile, or one agent entry |
+
+Commands reject extra arguments with a usage hint. Writes target the **global** file by default; any subcommand with `--project` writes the **project** file. You can also edit the JSON directly (changes are detected via an mtime cache and take effect on save).
 
 ## Updating
 
@@ -134,8 +136,6 @@ No self-update machinery — the hosts' package managers own updates:
 | `pi install git:...@vX.Y.Z` | Pinned by ref: reinstall with a newer tag to move |
 | `omp plugin install npm:...` | `omp plugin upgrade pi-model-sync` |
 | `omp plugin install git:...` / copied directory | `git pull` / re-copy |
-
-Commands write to the **global** file by default; any subcommand with `--project` writes the **project** file. You can also edit the JSON directly (changes are detected via an mtime cache and take effect on save).
 
 ## Notes
 

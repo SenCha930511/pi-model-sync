@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-pi-model-sync is a **dual-host coding-agent extension (omp / upstream pi)** that routes the model used by newly spawned subagents (task / eval `agent()` / workpool workers) and by `@mjakl/pi-subagent` `subagent` tool calls, based on the *spawning session's current model*, via a two-layer JSON profile table. It also exposes a `/model-sync` slash command to manage profiles. Not a CLI, not a library — loaded and executed by the host. MIT license, v0.1.0, `private: true` (never published).
+pi-model-sync is a **dual-host coding-agent extension (omp / upstream pi)** that routes the model used by newly spawned subagents (task / eval `agent()` / workpool workers) and by `@mjakl/pi-subagent` `subagent` tool calls, based on the *spawning session's current model*, via a two-layer JSON profile table. It also exposes a `/model-sync` slash command to manage profiles. Not a CLI, not a library — loaded and executed by the host. MIT license, v0.3.0, published to npm as `@sencha930511/pi-model-sync`.
 
 Key behaviors: running subagents never switch models mid-flight; nested spawns are intercepted using the spawning session's own model; selectors that fail to resolve fall through to default routing with a one-time TUI warning; an explicit per-call `model` in a pi-subagent call is never overwritten (frontmatter-level defaults are overridden by injection on purpose).
 
@@ -27,22 +27,22 @@ Flat two-module design; only inter-file dependency is `index.ts → ./config`.
 
 1. Shape guard: `toolName === "subagent"` and `input.calls` is a non-empty array; other same-named tools are untouched.
 2. For each call without an explicit `model`**: never overwrite** an explicit per-call model (decision 11); agent key matching is case-sensitive (exact key → `"*"` fallback).
-3. `selectorResolvable(ctx, selector)`: omp uses `ctx.models.resolve()`; upstream pi uses `piSelectorResolvable` against `ctx.modelRegistry` (`@alias` → false, `:level` suffix stripped, glob `*` → pass through, `provider/id`/`bare id` via `find`/`getAvailable`); no registry → undefined (pass through). Failed → skip with one-time TUI warning.
+3. `selectorResolvable(ctx, selector)` (memoized per `tool_call` event): omp uses `ctx.models.resolve()`; upstream pi uses `piSelectorResolvable` against `ctx.modelRegistry` (`@alias` → false, `:level` suffix stripped, glob `*` → pass through, `provider/id`/`bare id` via `find`/`getAvailable`; comparisons case-sensitive on purpose — the child resolves ids exactly); no registry → undefined (pass through). Failed → skip with one-time TUI warning.
 4. Injects `call.model = selector` via **dual write**: in-place mutation (upstream pi mechanism) AND returning `{ input }` (omp mechanism; re-validated against the tool schema — `model` is a legal optional field). Same never-throw invariant.
 
 **Command flow** — `/model-sync list|show|add|set|remove`, all accept `--project`. Writes default to the **global** file; `--project` targets `getProjectConfigPath(cwd)` (`.omp`, falling back to `.pi` by existence as above). `loadForWrite` refuses to write when the target file exists but its JSON is corrupt.
 
 **Config resolution precedence** (`config.ts`):
 
-- Global path: env `PI_MODEL_SYNC_CONFIG` (highest; relative paths resolve against cwd, and it also covers named omp profiles) → `PI_CODING_AGENT_DIR/pi-model-sync.json` → `~/.omp/agent/pi-model-sync.json`; **dual-host fallback**: when the `~/.omp` file does not exist and `~/.pi/agent/pi-model-sync.json` does, the `~/.pi` path wins (write target stays `~/.omp` when neither exists).
+- Global path: env `PI_MODEL_SYNC_CONFIG` (highest; relative paths resolve against the session cwd via `getGlobalConfigPath(cwd)` — process cwd fallback — and it also covers named omp profiles) → `PI_CODING_AGENT_DIR/pi-model-sync.json` → `~/.omp/agent/pi-model-sync.json`; **dual-host fallback**: when the `~/.omp` file does not exist and `~/.pi/agent/pi-model-sync.json` does, the `~/.pi` path wins (write target stays `~/.omp` when neither exists).
 - Project path: `<cwd>/.omp/pi-model-sync.json` — **cwd only, no upward search**; same isomorphic fallback from `~/.omp` to `<cwd>/.pi/pi-model-sync.json` by file existence.
 - An existing project file **wholly replaces** the global file (even broken JSON counts as "exists, no profiles"). No per-key merge — preserve this when editing.
 
-**Caching & writes**: reads cached by mtime in module-level `layerCache`; writes are atomic (`mkdir -p` → `<path>.tmp` → `renameSync`) and must invalidate the cache entry (`layerCache.delete`). All JSON, read or written, passes through `normalizeConfig` (drops blank/non-string entries, trims, preserves order).
+**Caching & writes**: reads cached by mtime in module-level `layerCache`; glob patterns compiled once in module-level `globCache`; writes are atomic (`mkdir -p` → unique `<path>.<pid>.<timestamp>.tmp` → `renameSync`, tmp unlinked on failure) and must invalidate the cache entry (`layerCache.delete`). All JSON, read or written, passes through `normalizeConfig` (drops blank/non-string entries, trims, preserves order).
 
 ## Key Directories
 
-None — the repo is flat (6 tracked files). See **Important Files**.
+None — the repo is flat (9 tracked files). See **Important Files**.
 
 ## Development Commands
 
@@ -68,7 +68,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 - **Types**: explicit return types everywhere; `unknown` + guards; no enums, generics, or decorators; standard TS only (no tsconfig-dependent features — there is no tsconfig).
 - **Async**: minimal — only the command handler is async; all config I/O is synchronous `node:fs`; no top-level await.
 - **Mutation safety**: commands deep-copy before mutating (`loadForWrite` rebuilds profiles; `cmdSet`/`cmdRemove` spread the subagents map). Cache reads return shared nested maps — clone before editing.
-- **Command semantics to preserve**: profile lookup by `main` is case-insensitive; `set <main> * <model>` collapses the map to a plain string; removing the last agent key deletes the whole profile; `pickSubagentSelector` semantics (exact key → `*` fallback) must stay consistent with command-side edits.
+- **Command semantics to preserve**: profile lookup by `main` is case-insensitive; `set <main> * <model>` updates the profile default while preserving per-agent entries (collapsing to a plain string only when no per-agent entry exists); removing entries until only `*` remains collapses back to the plain string; removing the last agent key deletes the whole profile; subcommands reject extra arguments with a usage hint; `pickSubagentSelector` semantics (exact key → `*` fallback) must stay consistent with command-side edits.
 
 ## Important Files
 
@@ -79,6 +79,7 @@ Then in an omp session: run `/model-sync list|show|add ...` and spawn a subagent
 |`package.json`|Minimal manifest; `omp.extensions` / `pi.extensions: ["./index.ts"]` are the host load declarations|
 |`README.md`|Sole documentation (English): install, config schema, matching rules, command table — **update it with any behavior change**|
 |`llms.txt`|Agent-facing doc index (llmstxt.org convention): what the project is, install commands per host, minimal config — keep in sync with README when install/config changes|
+|`CONTRIBUTING.md`|Contributor guide: verification expectations (bun import check), PR and style conventions|
 | `~/.omp/agent/pi-model-sync.json` | Global config (runtime artifact, not in repo) |
 | `<cwd>/.omp/pi-model-sync.json` | Project config (runtime artifact, replaces global wholesale) |
 
