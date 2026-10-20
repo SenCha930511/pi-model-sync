@@ -132,6 +132,8 @@ function listRegistryModels(registry: ModelRegistryFacade): CurrentModelRef[] {
  *    (a failure surfaces as an explicit error on that delegation);
  * 4. `provider/id` → find() decides; without find, scan the list;
  * 5. bare id → scan the list for a matching id.
+ * Comparisons are case-sensitive on purpose: the child process resolves ids exactly, so
+ * leniency here would inject selectors the child cannot resolve (unlike `main`, matched loosely).
  */
 function piSelectorResolvable(selector: string, registry: ModelRegistryFacade): boolean {
   if (selector.startsWith("@")) return false;
@@ -268,6 +270,9 @@ export default function modelSync(pi: ExtensionAPI): void {
       const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
       if (!profile) return undefined;
       let changed = false;
+      // Per-event memo (dynamic insert → Map): a batch often repeats the same agent or
+      // "*" default; validate each unique selector once (registry scans are not free upstream).
+      const resolutionCache = new Map<string, boolean | undefined>();
       for (const call of calls) {
         if (!call || typeof call !== "object") continue;
         // Guarded as an object above; model/agent are typeof-validated before use.
@@ -280,7 +285,10 @@ export default function modelSync(pi: ExtensionAPI): void {
         // agent names and profile keys are aligned by the user).
         const selector = pickSubagentSelector(profile, agentName);
         if (!selector) continue;
-        const ok = selectorResolvable(ctx, selector);
+        if (!resolutionCache.has(selector)) {
+          resolutionCache.set(selector, selectorResolvable(ctx, selector));
+        }
+        const ok = resolutionCache.get(selector);
         if (ok === false) {
           // Same as decision 4: unresolvable → no injection; pi-subagent's default
           // (frontmatter → parent model) applies; warned once in the TUI.
@@ -326,20 +334,30 @@ export default function modelSync(pi: ExtensionAPI): void {
     const useProject = tokens.includes("--project");
     const args = tokens.filter((t) => t !== "--project");
     const [sub, ...rest] = args;
-    const target = useProject ? getProjectConfigPath(ctx.cwd) : getGlobalConfigPath();
+    const target = useProject ? getProjectConfigPath(ctx.cwd) : getGlobalConfigPath(ctx.cwd);
 
     switch (sub) {
       case undefined:
       case "":
       case "list":
+        // Strict arity: extra tokens are almost certainly a typo'd subcommand; refuse
+        // instead of silently ignoring them.
+        if (rest.length > 0) {
+          notify(ctx, `Unexpected argument for list: ${rest[0]}\n${USAGE}`);
+          return;
+        }
         cmdList(ctx);
         return;
       case "show":
+        if (rest.length > 0) {
+          notify(ctx, `Unexpected argument for show: ${rest[0]}\n${USAGE}`);
+          return;
+        }
         cmdShow(ctx);
         return;
       case "add": {
         const [main, model] = rest;
-        if (!main || !model) {
+        if (rest.length !== 2 || !main || !model) {
           notify(ctx, "Usage: /model-sync add <main> <model>");
           return;
         }
@@ -348,7 +366,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       }
       case "set": {
         const [main, agent, model] = rest;
-        if (!main || !agent || !model) {
+        if (rest.length !== 3 || !main || !agent || !model) {
           notify(ctx, "Usage: /model-sync set <main> <agent> <model>");
           return;
         }
@@ -357,7 +375,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       }
       case "remove": {
         const [main, agent] = rest;
-        if (!main) {
+        if (rest.length < 1 || rest.length > 2 || !main) {
           notify(ctx, "Usage: /model-sync remove <main> [agent]");
           return;
         }
@@ -410,7 +428,16 @@ export default function modelSync(pi: ExtensionAPI): void {
     const existing = config.profiles.find((p) => p.main.toLowerCase() === main.toLowerCase());
     const profile: Profile = existing ?? { main, subagents: {} };
     if (agent === "*") {
-      profile.subagents = model;
+      // Profile default: preserve existing per-agent entries; collapse to the plain
+      // string form only when no per-agent entry exists (set * must not behave like add).
+      if (typeof profile.subagents === "string" || Object.keys(profile.subagents).length === 0) {
+        profile.subagents = model;
+      } else {
+        const map: SubagentMap = Object.create(null) as SubagentMap;
+        Object.assign(map, profile.subagents);
+        map["*"] = model;
+        profile.subagents = map;
+      }
     } else {
       // Null-prototype map (same hardening as normalizeConfig): an exotic agent name like
       // "__proto__" must stay an own property instead of being coerced away on assignment.
@@ -450,8 +477,12 @@ export default function modelSync(pi: ExtensionAPI): void {
       }
       const map: SubagentMap = { ...profile.subagents };
       delete map[agent];
-      if (Object.keys(map).length === 0) {
+      const keys = Object.keys(map);
+      if (keys.length === 0) {
         config.profiles.splice(idx, 1);
+      } else if (keys.length === 1 && keys[0] === "*") {
+        // A lone default collapses back to the plain string form.
+        profile.subagents = map["*"];
       } else {
         profile.subagents = map;
       }
@@ -480,7 +511,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       }
     }
     const otherPath =
-      layer.layer === "project" ? getGlobalConfigPath() : getProjectConfigPath(ctx.cwd);
+      layer.layer === "project" ? getGlobalConfigPath(ctx.cwd) : getProjectConfigPath(ctx.cwd);
     if (otherPath !== layer.path && configFileExists(otherPath)) {
       const other = readLayer(otherPath);
       lines.push(`(inactive) ${layer.layer === "project" ? "global" : "project"} layer: ${otherPath}`);

@@ -1,4 +1,4 @@
-import { statSync, readFileSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { statSync, readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 
@@ -20,7 +20,7 @@ export interface CurrentModelRef {
 
 /**
  * Global config path:
- * PI_MODEL_SYNC_CONFIG (absolute, or relative to cwd) → PI_CODING_AGENT_DIR/pi-model-sync.json
+ * PI_MODEL_SYNC_CONFIG (absolute, or relative to the session cwd) → PI_CODING_AGENT_DIR/pi-model-sync.json
  * → ~/.omp/agent/pi-model-sync.json.
  * Decision 12 (dual-host landing): on the final fallback, when the ~/.omp file does not exist
  * and the ~/.pi file does, return ~/.pi/agent/pi-model-sync.json (the upstream pi host's
@@ -28,14 +28,17 @@ export interface CurrentModelRef {
  * Known limit: named-profile (omp --profile <name>) agent dirs aren't covered by these two
  * env vars, so the default path applies there; override with PI_MODEL_SYNC_CONFIG.
  */
-export function getGlobalConfigPath(): string {
+export function getGlobalConfigPath(cwd?: string): string {
+  // Relative overrides resolve against the session cwd when the caller provides one;
+  // the host process cwd is only a fallback (a session may run in another directory).
+  const base = cwd ?? process.cwd();
   const override = process.env.PI_MODEL_SYNC_CONFIG?.trim();
   if (override) {
-    return isAbsolute(override) ? override : resolve(override);
+    return isAbsolute(override) ? override : resolve(base, override);
   }
   const agentDir = process.env.PI_CODING_AGENT_DIR?.trim();
   if (agentDir) {
-    return resolve(agentDir, "pi-model-sync.json");
+    return resolve(base, agentDir, "pi-model-sync.json");
   }
   const ompPath = resolve(homedir(), ".omp", "agent", "pi-model-sync.json");
   const piPath = resolve(homedir(), ".pi", "agent", "pi-model-sync.json");
@@ -69,7 +72,7 @@ export function resolveActiveLayer(cwd: string): { path: string; layer: "project
     statSync(projectPath);
     return { path: projectPath, layer: "project" };
   } catch {
-    return { path: getGlobalConfigPath(), layer: "global" };
+    return { path: getGlobalConfigPath(cwd), layer: "global" };
   }
 }
 
@@ -91,9 +94,6 @@ interface CachedLayer {
 
 /** Module-level mtime cache (child sessions share module state with the parent). */
 const layerCache = new Map<string, CachedLayer>();
-
-/** Last active-layer error seen by readConfig (null on success). */
-let lastError: string | null = null;
 
 export function readLayer(path: string): { config: ModelSyncConfig; error: string | null } {
   let mtimeMs: number;
@@ -121,28 +121,41 @@ export function readLayer(path: string): { config: ModelSyncConfig; error: strin
 /** For the spawn-interception path: never throws; returns an empty config when unreadable. */
 export function readConfig(cwd: string): ModelSyncConfig {
   const { path } = resolveActiveLayer(cwd);
-  const result = readLayer(path);
-  lastError = result.error;
-  return result.config;
+  return readLayer(path).config;
 }
 
-export function getLastConfigError(): string | null {
-  return lastError;
-}
-
-/** Atomic write: mkdir → <path>.tmp → rename; invalidates the mtime cache entry afterwards. */
+/** Atomic write: mkdir → unique <path>.<pid>.<timestamp>.tmp → rename; the tmp file is
+ * removed on failure and the mtime cache entry invalidated afterwards. */
 export function writeConfig(path: string, config: ModelSyncConfig): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(normalizeConfig(config), null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  // Unique suffix: concurrent sessions must not fight over one shared tmp file.
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(normalizeConfig(config), null, 2)}\n`, "utf8");
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Best effort: the tmp file may never have been created.
+    }
+    throw err;
+  }
   layerCache.delete(path);
 }
 
+/** Compiled glob cache keyed by (already lowercased) pattern; configs are small and user-authored. */
+const globCache = new Map<string, RegExp>();
+
 /** `*` matches any string (including `/`); all other regex metachars are escaped. Input must already be lowercased. */
 function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "*" ? ".*" : `\\${ch}`));
-  return new RegExp(`^${escaped}$`);
+  let re = globCache.get(pattern);
+  if (!re) {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "*" ? ".*" : `\\${ch}`));
+    re = new RegExp(`^${escaped}$`);
+    globCache.set(pattern, re);
+  }
+  return re;
 }
 
 /**
