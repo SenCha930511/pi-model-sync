@@ -17,6 +17,7 @@
 // while omp supplies the same ambient ExtensionAPI surface under either name.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  cloneSubagentMap,
   configFileExists,
   findProfile,
   getGlobalConfigPath,
@@ -86,13 +87,13 @@ const PI_THINKING_LEVELS: Record<string, true> = {
 function toModelRef(model: unknown): CurrentModelRef | undefined {
   if (!model || typeof model !== "object") return undefined;
   let id: string | undefined;
-  if ("id" in model && typeof model.id === "string") id = model.id;
-  else if ("modelId" in model && typeof model.modelId === "string") id = model.modelId;
-  else if ("model" in model && typeof model.model === "string") id = model.model;
+  if ("id" in model && typeof model.id === "string") id = model.id.trim();
+  else if ("modelId" in model && typeof model.modelId === "string") id = model.modelId.trim();
+  else if ("model" in model && typeof model.model === "string") id = model.model.trim();
   if (!id) return undefined;
   let provider = "";
-  if ("provider" in model && typeof model.provider === "string") provider = model.provider;
-  else if ("providerId" in model && typeof model.providerId === "string") provider = model.providerId;
+  if ("provider" in model && typeof model.provider === "string") provider = model.provider.trim();
+  else if ("providerId" in model && typeof model.providerId === "string") provider = model.providerId.trim();
   return { provider, id };
 }
 
@@ -109,17 +110,25 @@ function currentModelRef(ctx: ExtensionContextLike): CurrentModelRef | undefined
 }
 
 /** Narrow modelRegistry.getAvailable()/getAll() entries to { provider, id } (same guard as toModelRef). */
-function listRegistryModels(registry: ModelRegistryFacade): CurrentModelRef[] {
-  let raw: unknown;
-  if (typeof registry.getAvailable === "function") raw = registry.getAvailable();
-  if (!Array.isArray(raw) && typeof registry.getAll === "function") raw = registry.getAll();
-  if (!Array.isArray(raw)) return [];
-  const out: CurrentModelRef[] = [];
-  for (const entry of raw) {
-    const ref = toModelRef(entry);
-    if (ref) out.push(ref);
+function hasRegistryModel(
+  registry: ModelRegistryFacade,
+  provider: string | undefined,
+  id: string,
+): boolean {
+  try {
+    let raw: unknown;
+    if (typeof registry.getAvailable === "function") raw = registry.getAvailable();
+    if (!Array.isArray(raw) && typeof registry.getAll === "function") raw = registry.getAll();
+    if (!Array.isArray(raw)) return false;
+    for (const entry of raw) {
+      const ref = toModelRef(entry);
+      if (!ref || ref.id !== id) continue;
+      if (provider === undefined || ref.provider === provider) return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
-  return out;
 }
 
 /**
@@ -139,21 +148,27 @@ function piSelectorResolvable(selector: string, registry: ModelRegistryFacade): 
   if (selector.startsWith("@")) return false;
   let base = selector;
   const colon = base.lastIndexOf(":");
-  if (colon > 0 && PI_THINKING_LEVELS[base.slice(colon + 1)]) {
+  if (colon > 0 && Object.hasOwn(PI_THINKING_LEVELS, base.slice(colon + 1))) {
     base = base.slice(0, colon);
   }
   if (!base) return false;
   if (base.includes("*")) return true;
   const slash = base.indexOf("/");
+  if (slash === 0) return false;
   if (slash > 0) {
     const provider = base.slice(0, slash);
     const id = base.slice(slash + 1);
+    if (!id) return false;
     if (typeof registry.find === "function") {
-      return Boolean(registry.find(provider, id));
+      try {
+        return Boolean(registry.find(provider, id));
+      } catch {
+        return false;
+      }
     }
-    return listRegistryModels(registry).some((m) => m.provider === provider && m.id === id);
+    return hasRegistryModel(registry, provider, id);
   }
-  return listRegistryModels(registry).some((m) => m.id === base);
+  return hasRegistryModel(registry, undefined, base);
 }
 
 /**
@@ -194,15 +209,43 @@ function summarizeSubagents(subagents: Profile["subagents"]): string {
 }
 
 function notify(ctx: ExtensionContextLike, message: string): void {
-  ctx.ui.notify(message, "info");
+  if (ctx.ui && typeof ctx.ui.notify === "function") {
+    ctx.ui.notify(message, "info");
+  }
+}
+
+/** Decision 4 helper: one-time TUI warning for a selector that failed to resolve; the
+ * warned set is bounded so long sessions stay lean. */
+function warnUnresolvableOnce(ctx: ExtensionContextLike, selector: string, tail: string): void {
+  if (ctx.mode !== "tui" || warnedSelectors.has(selector)) return;
+  if (warnedSelectors.size >= 256) warnedSelectors.clear();
+  warnedSelectors.add(selector);
+  notify(ctx, `pi-model-sync: selector "${selector}" could not be resolved to an available model; ${tail}`);
+}
+
+/**
+ * Decision 11 eligibility probe: the trimmed agent name when `call` is a plain object
+ * without an explicit non-blank string model and with a non-blank string agent name;
+ * undefined otherwise (arrays and primitives are never call records). Shared by the
+ * hot-path pre-scan and the injection loop so the two can never disagree.
+ */
+function eligibleCallAgent(call: unknown): string | undefined {
+  if (!call || typeof call !== "object" || Array.isArray(call)) return undefined;
+  // Guarded as an object above; model/agent are typeof-validated before use.
+  const record = call as Record<string, unknown>;
+  if (typeof record.model === "string" && record.model.trim()) return undefined;
+  if (typeof record.agent !== "string") return undefined;
+  const agentName = record.agent.trim();
+  return agentName || undefined;
 }
 
 export default function modelSync(pi: ExtensionAPI): void {
   // Upstream pi's setLabel is (entryId, label)-shaped; skip when the omp usage is
   // incompatible there — functionality is unaffected.
-  const setLabel = (pi as { setLabel?: (label: string) => void }).setLabel;
   try {
-    setLabel?.("Model Sync");
+    if ("setLabel" in pi && typeof pi.setLabel === "function") {
+      pi.setLabel("Model Sync");
+    }
   } catch {
     // Ignore: upstream pi's setLabel semantics differ.
   }
@@ -213,7 +256,11 @@ export default function modelSync(pi: ExtensionAPI): void {
   try {
     pi.on("before_subagent_spawn", (event: SubagentSpawnEvent, ctx: ExtensionContextLike) => {
       try {
-        const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
+        // Cheap guards first (hot path): an unrecognizable session model can never match
+        // a profile, so the config read is skipped entirely.
+        const modelRef = currentModelRef(ctx);
+        if (!modelRef) return undefined;
+        const profile = findProfile(readConfig(ctx.cwd), modelRef);
         if (!profile) return undefined;
         const agentName = extractAgentName(event);
         const selector = pickSubagentSelector(profile, agentName);
@@ -221,10 +268,7 @@ export default function modelSync(pi: ExtensionAPI): void {
         const ok = selectorResolvable(ctx, selector);
         if (ok === false) {
           // Decision 4: unresolvable selectors fall back to default routing, warned once in the TUI.
-          if (ctx.mode === "tui" && !warnedSelectors.has(selector)) {
-            warnedSelectors.add(selector);
-            notify(ctx, `pi-model-sync: selector "${selector}" could not be resolved to an available model; using default routing for this spawn`);
-          }
+          warnUnresolvableOnce(ctx, selector, "using default routing for this spawn");
           return undefined;
         }
         const rawPatterns = event.patterns;
@@ -262,25 +306,30 @@ export default function modelSync(pi: ExtensionAPI): void {
     try {
       if (event.toolName !== "subagent") return undefined;
       const input = event.input;
-      if (!input || typeof input !== "object") return undefined;
+      if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
       // Guarded as an object above; every dynamic field (calls/agent/model...) is validated again field by field.
       const inputRecord = input as Record<string, unknown>;
       const calls = inputRecord.calls;
       if (!Array.isArray(calls) || calls.length === 0) return undefined;
-      const profile = findProfile(readConfig(ctx.cwd), currentModelRef(ctx));
+      // Hot-path short-circuit (decision 11): when every call already carries an explicit
+      // model there is nothing to inject — skip the model lookup and config read entirely.
+      if (!calls.some(eligibleCallAgent)) return undefined;
+      const modelRef = currentModelRef(ctx);
+      if (!modelRef) return undefined;
+      const profile = findProfile(readConfig(ctx.cwd), modelRef);
       if (!profile) return undefined;
       let changed = false;
       // Per-event memo (dynamic insert → Map): a batch often repeats the same agent or
       // "*" default; validate each unique selector once (registry scans are not free upstream).
       const resolutionCache = new Map<string, boolean | undefined>();
       for (const call of calls) {
-        if (!call || typeof call !== "object") continue;
-        // Guarded as an object above; model/agent are typeof-validated before use.
-        const record = call as Record<string, unknown>;
-        // Decision 11: an explicit per-call model always wins and is never overwritten.
-        if (typeof record.model === "string" && record.model.trim()) continue;
-        const agentName = typeof record.agent === "string" ? record.agent.trim() : "";
+        // Decision 11: an explicit per-call model always wins and is never overwritten;
+        // eligibility (plain object, no explicit model, non-blank agent) is shared with
+        // the pre-scan so the two can never disagree.
+        const agentName = eligibleCallAgent(call);
         if (!agentName) continue;
+        // Guarded as an object inside eligibleCallAgent; only `model` is written below.
+        const record = call as Record<string, unknown>;
         // exact key → "*" fallback; key matching is case-sensitive (existing semantics:
         // agent names and profile keys are aligned by the user).
         const selector = pickSubagentSelector(profile, agentName);
@@ -292,10 +341,7 @@ export default function modelSync(pi: ExtensionAPI): void {
         if (ok === false) {
           // Same as decision 4: unresolvable → no injection; pi-subagent's default
           // (frontmatter → parent model) applies; warned once in the TUI.
-          if (ctx.mode === "tui" && !warnedSelectors.has(selector)) {
-            warnedSelectors.add(selector);
-            notify(ctx, `pi-model-sync: selector "${selector}" could not be resolved to an available model; using the default model for this subagent delegation`);
-          }
+          warnUnresolvableOnce(ctx, selector, "using the default model for this subagent delegation");
           continue;
         }
         record.model = selector;
@@ -395,17 +441,21 @@ export default function modelSync(pi: ExtensionAPI): void {
       return null;
     }
     return {
-      profiles: layer.config.profiles.map((p) => ({
-        main: p.main,
-        subagents: typeof p.subagents === "string" ? p.subagents : { ...p.subagents },
-      })),
+      profiles: layer.config.profiles.map((p) => {
+        if (typeof p.subagents === "string") {
+          return { main: p.main, subagents: p.subagents };
+        }
+        const map = cloneSubagentMap(p.subagents);
+        return { main: p.main, subagents: map };
+      }),
     };
   }
 
   function cmdAdd(ctx: ExtensionContextLike, target: string, main: string, model: string): void {
     const config = loadForWrite(ctx, target);
     if (!config) return;
-    const existing = config.profiles.find((p) => p.main.toLowerCase() === main.toLowerCase());
+    const mainLower = main.toLowerCase();
+    const existing = config.profiles.find((p) => p.main.toLowerCase() === mainLower);
     if (existing) {
       existing.main = main;
       existing.subagents = model;
@@ -425,24 +475,23 @@ export default function modelSync(pi: ExtensionAPI): void {
   ): void {
     const config = loadForWrite(ctx, target);
     if (!config) return;
-    const existing = config.profiles.find((p) => p.main.toLowerCase() === main.toLowerCase());
-    const profile: Profile = existing ?? { main, subagents: {} };
+    const mainLower = main.toLowerCase();
+    const existing = config.profiles.find((p) => p.main.toLowerCase() === mainLower);
+    const profile: Profile = existing ?? { main, subagents: Object.create(null) as SubagentMap };
     if (agent === "*") {
       // Profile default: preserve existing per-agent entries; collapse to the plain
       // string form only when no per-agent entry exists (set * must not behave like add).
       if (typeof profile.subagents === "string" || Object.keys(profile.subagents).length === 0) {
         profile.subagents = model;
       } else {
-        const map: SubagentMap = Object.create(null) as SubagentMap;
-        Object.assign(map, profile.subagents);
+        const map = cloneSubagentMap(profile.subagents);
         map["*"] = model;
         profile.subagents = map;
       }
     } else {
       // Null-prototype map (same hardening as normalizeConfig): an exotic agent name like
       // "__proto__" must stay an own property instead of being coerced away on assignment.
-      const map: SubagentMap = Object.create(null) as SubagentMap;
-      Object.assign(map, typeof profile.subagents === "string" ? { "*": profile.subagents } : profile.subagents);
+      const map = cloneSubagentMap(typeof profile.subagents === "string" ? { "*": profile.subagents } : profile.subagents);
       map[agent] = model;
       profile.subagents = map;
     }
@@ -459,7 +508,8 @@ export default function modelSync(pi: ExtensionAPI): void {
   ): void {
     const config = loadForWrite(ctx, target);
     if (!config) return;
-    const idx = config.profiles.findIndex((p) => p.main.toLowerCase() === main.toLowerCase());
+    const mainLower = main.toLowerCase();
+    const idx = config.profiles.findIndex((p) => p.main.toLowerCase() === mainLower);
     if (idx < 0) {
       notify(ctx, `No profile found for main ${main} (target: ${target})`);
       return;
@@ -475,7 +525,7 @@ export default function modelSync(pi: ExtensionAPI): void {
         notify(ctx, `Profile ${main} has no entry for agent "${agent}"`);
         return;
       }
-      const map: SubagentMap = { ...profile.subagents };
+      const map = cloneSubagentMap(profile.subagents);
       delete map[agent];
       const keys = Object.keys(map);
       if (keys.length === 0) {
@@ -554,8 +604,14 @@ export default function modelSync(pi: ExtensionAPI): void {
       if (typeof profile.subagents === "string") {
         lines.push(`  * → ${profile.subagents}${resolveStatus(ctx, profile.subagents)}`);
       } else {
+        const statusCache = new Map<string, string>();
         for (const [agentName, selector] of Object.entries(profile.subagents)) {
-          lines.push(`  ${agentName} → ${selector}${resolveStatus(ctx, selector)}`);
+          let status = statusCache.get(selector);
+          if (status === undefined) {
+            status = resolveStatus(ctx, selector);
+            statusCache.set(selector, status);
+          }
+          lines.push(`  ${agentName} → ${selector}${status}`);
         }
       }
     }
