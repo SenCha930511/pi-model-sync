@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-pi-model-sync is a **dual-host coding-agent extension (omp / upstream pi)** that routes the model used by newly spawned subagents (task / eval `agent()` / workpool workers) and by `@mjakl/pi-subagent` `subagent` tool calls, based on the *spawning session's current model*, via a two-layer JSON profile table. It also exposes a `/model-sync` slash command to manage profiles. Not a CLI, not a library — loaded and executed by the host. MIT license, v0.3.0, published to npm as `@sencha930511/pi-model-sync`.
+pi-model-sync is a **dual-host coding-agent extension (omp / upstream pi)** that routes the model used by newly spawned subagents (task / eval `agent()` / workpool workers) and by `@mjakl/pi-subagent` `subagent` tool calls, based on the *spawning session's current model*, via a two-layer JSON profile table. It also exposes a `/model-sync` slash command to manage profiles. Not a CLI, not a library — loaded and executed by the host. MIT license, v0.3.1, published to npm as `@sencha930511/pi-model-sync`.
 
 Key behaviors: running subagents never switch models mid-flight; nested spawns are intercepted using the spawning session's own model; selectors that fail to resolve fall through to default routing with a one-time TUI warning; an explicit per-call `model` in a pi-subagent call is never overwritten (frontmatter-level defaults are overridden by injection on purpose).
 
