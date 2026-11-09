@@ -9,8 +9,16 @@ export interface Profile {
   subagents: string | SubagentMap;
 }
 
-export interface ModelSyncConfig {
+export type PresetMap = Record<string, Profile[]>;
+
+export type ModelSyncConfig =
+  | { profiles: Profile[] }
+  | { activePreset?: string; presets: PresetMap };
+
+export interface EffectiveConfig {
+  activePreset?: string;
   profiles: Profile[];
+  warning?: string;
 }
 
 export interface CurrentModelRef {
@@ -157,8 +165,11 @@ interface CachedLayer {
 /** Module-level mtime+size cache (child sessions share module state with the parent). */
 const layerCache = new Map<string, CachedLayer>();
 
-/** Shared read-only empty config for not-found and parse-failure results. */
+/** Shared read-only empty config for a missing file (legacy shape keeps writes downgrade-compatible). */
 const EMPTY_CONFIG: ModelSyncConfig = { profiles: [] };
+
+/** Shared fail-closed config for parse/structural errors: a named config with no presets. */
+const INVALID_CONFIG: ModelSyncConfig = { presets: Object.create(null) as PresetMap };
 
 export function readLayer(path: string): { config: ModelSyncConfig; error: string | null } {
   return readLayerWithStat(path, statFile(path) ?? null);
@@ -175,13 +186,15 @@ function readLayerWithStat(
   const cached = layerCache.get(path);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     // Zero-copy hit: consumers either read only or clone before editing (loadForWrite
-    // rebuilds profiles), matching the documented shared-nested-maps cache contract.
+    // clones the whole document), matching the documented shared-nested-maps cache contract.
     return { config: cached.config, error: cached.error };
   }
-  let config: ModelSyncConfig = EMPTY_CONFIG;
+  let config: ModelSyncConfig = INVALID_CONFIG;
   let error: string | null = null;
   try {
-    config = normalizeConfig(JSON.parse(readFileSync(path, "utf8")) as unknown);
+    const parsed = parseConfig(JSON.parse(readFileSync(path, "utf8")) as unknown);
+    config = parsed.config;
+    error = parsed.error ? `Invalid config file (${path}): ${parsed.error}` : null;
   } catch (err) {
     error = `Could not parse config file (${path}): ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -190,13 +203,16 @@ function readLayerWithStat(
   return { config, error };
 }
 
-/** For the spawn-interception path: never throws; returns an empty config when unreadable. */
-export function readConfig(cwd: string): ModelSyncConfig {
+/** For the spawn-interception path: never throws; zero profiles on any file error and
+ * the same active-preset projection the command displays use otherwise. */
+export function readConfig(cwd: string): EffectiveConfig {
   try {
     const { path, stat } = resolveActiveLayerWithStat(cwd);
-    return readLayerWithStat(path, stat !== undefined ? stat : statFile(path) ?? null).config;
+    const layer = readLayerWithStat(path, stat !== undefined ? stat : statFile(path) ?? null);
+    if (layer.error) return { profiles: [], warning: layer.error };
+    return projectActiveProfiles(layer.config);
   } catch {
-    return EMPTY_CONFIG;
+    return { profiles: [] };
   }
 }
 
@@ -241,7 +257,10 @@ function globToRegExp(pattern: string): RegExp {
  * - main with `*`: glob, whole-string match against both the provider/id and bare id forms.
  * First match in profile order wins; returns undefined when model is undefined.
  */
-export function findProfile(config: ModelSyncConfig, model: CurrentModelRef | undefined): Profile | undefined {
+export function findProfile(
+  config: EffectiveConfig | { profiles: Profile[] },
+  model: CurrentModelRef | undefined,
+): Profile | undefined {
   if (!model || !model.id || config.profiles.length === 0) return undefined;
   const provider = model.provider.toLowerCase();
   const id = model.id.toLowerCase();
@@ -276,16 +295,84 @@ export function cloneSubagentMap(source: SubagentMap): SubagentMap {
   return map;
 }
 
+export function isNamedConfig(
+  config: ModelSyncConfig,
+): config is { activePreset?: string; presets: PresetMap } {
+  return "presets" in config;
+}
+
+/** Deep-clone profile lists; nested subagent maps become null-prototype copies. */
+export function cloneProfiles(profiles: Profile[]): Profile[] {
+  return profiles.map((profile) => ({
+    main: profile.main,
+    subagents:
+      typeof profile.subagents === "string" ? profile.subagents : cloneSubagentMap(profile.subagents),
+  }));
+}
+
+/** Full-document deep clone for the write path: every preset and every nested map. */
+export function cloneConfig(config: ModelSyncConfig): ModelSyncConfig {
+  if (!isNamedConfig(config)) return { profiles: cloneProfiles(config.profiles) };
+  const presets: PresetMap = Object.create(null) as PresetMap;
+  for (const [name, profiles] of Object.entries(config.presets)) {
+    presets[name] = cloneProfiles(profiles);
+  }
+  return config.activePreset === undefined
+    ? { presets }
+    : { activePreset: config.activePreset, presets };
+}
+
+/** The only active-selection policy. Legacy configs expose the virtual "default" preset.
+ * Named configs fail closed on a missing or dangling active name — never fall back. */
+export function projectActiveProfiles(config: ModelSyncConfig): EffectiveConfig {
+  if (!isNamedConfig(config)) {
+    return { activePreset: "default", profiles: config.profiles };
+  }
+  const activePreset = config.activePreset;
+  if (!activePreset) {
+    return {
+      profiles: [],
+      warning: "No active preset is selected; no profiles are active.",
+    };
+  }
+  if (!Object.hasOwn(config.presets, activePreset)) {
+    return {
+      profiles: [],
+      warning: `Active preset "${activePreset}" does not exist; no profiles are active.`,
+    };
+  }
+  return { activePreset, profiles: config.presets[activePreset] };
+}
+
+/** Preset names in document order; a legacy config exposes the virtual "default". */
+export function presetNames(config: ModelSyncConfig): string[] {
+  return isNamedConfig(config) ? Object.keys(config.presets) : ["default"];
+}
+
+/** Exact, case-sensitive preset lookup; legacy "default" maps to its profiles array. */
+export function getPresetProfiles(config: ModelSyncConfig, name: string): Profile[] | undefined {
+  if (!isNamedConfig(config)) return name === "default" ? config.profiles : undefined;
+  return Object.hasOwn(config.presets, name) ? config.presets[name] : undefined;
+}
+
+/** Convert a legacy document to named mode without switching away from its profiles. */
+export function toPresetConfig(config: { profiles: Profile[] }): {
+  activePreset: string;
+  presets: PresetMap;
+} {
+  const presets: PresetMap = Object.create(null) as PresetMap;
+  presets.default = cloneProfiles(config.profiles);
+  return { activePreset: "default", presets };
+}
+
 /**
- * Normalize raw JSON: skip entries with a non-string/blank main, a subagents value that is
- * neither string nor object, or object keys whose values are not non-blank strings;
+ * Normalize raw profile entries: skip entries with a non-string/blank main, a subagents value
+ * that is neither string nor object, or object keys whose values are not non-blank strings;
  * trim everything; preserve profile order.
  */
-export function normalizeConfig(raw: unknown): ModelSyncConfig {
+function normalizeProfiles(rawProfiles: unknown): Profile[] {
   const profiles: Profile[] = [];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { profiles };
-  const rawProfiles = "profiles" in raw ? raw.profiles : undefined;
-  if (!Array.isArray(rawProfiles)) return { profiles };
+  if (!Array.isArray(rawProfiles)) return profiles;
   for (const entry of rawProfiles) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const mainRaw = "main" in entry ? entry.main : undefined;
@@ -311,5 +398,91 @@ export function normalizeConfig(raw: unknown): ModelSyncConfig {
     }
     profiles.push({ main: mainRaw.trim(), subagents });
   }
-  return { profiles };
+  return profiles;
+}
+
+interface ParsedConfig {
+  config: ModelSyncConfig;
+  error: string | null;
+}
+
+/** Internal parse boundary: shape errors are returned, never thrown. Structural errors
+ * yield a fail-closed config so a partially valid document cannot route. */
+function parseConfig(raw: unknown): ParsedConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      config: INVALID_CONFIG,
+      error: "Config root must be a JSON object.",
+    };
+  }
+  const record = raw as Record<string, unknown>;
+  const hasProfiles = Object.hasOwn(record, "profiles");
+  const hasPresets = Object.hasOwn(record, "presets");
+  const hasActive = Object.hasOwn(record, "activePreset");
+  if (hasProfiles && (hasPresets || hasActive)) {
+    return {
+      config: INVALID_CONFIG,
+      error: 'Config cannot mix "profiles" with "presets" or "activePreset".',
+    };
+  }
+  if (hasPresets || hasActive) {
+    if (!hasPresets) {
+      return {
+        config: INVALID_CONFIG,
+        error: 'A config with "activePreset" must also define a "presets" object.',
+      };
+    }
+    const rawPresets = record.presets;
+    if (!rawPresets || typeof rawPresets !== "object" || Array.isArray(rawPresets)) {
+      return {
+        config: INVALID_CONFIG,
+        error: '"presets" must be an object mapping preset names to profile arrays.',
+      };
+    }
+    const rawActive = hasActive ? record.activePreset : undefined;
+    if (hasActive && (typeof rawActive !== "string" || !rawActive.trim())) {
+      return {
+        config: INVALID_CONFIG,
+        error: '"activePreset" must be a non-blank string when present.',
+      };
+    }
+    const presets: PresetMap = Object.create(null) as PresetMap;
+    for (const [rawName, rawProfiles] of Object.entries(rawPresets as Record<string, unknown>)) {
+      const name = rawName.trim();
+      if (!name || /\s/.test(name)) {
+        return {
+          config: INVALID_CONFIG,
+          error: `Invalid preset name "${rawName}": preset names must be single tokens.`,
+        };
+      }
+      if (Object.hasOwn(presets, name)) {
+        return {
+          config: INVALID_CONFIG,
+          error: `Duplicate preset name "${name}" after trimming.`,
+        };
+      }
+      if (!Array.isArray(rawProfiles)) {
+        return {
+          config: INVALID_CONFIG,
+          error: `Preset "${name}" must be an array of profiles.`,
+        };
+      }
+      presets[name] = normalizeProfiles(rawProfiles);
+    }
+    const activePreset = typeof rawActive === "string" ? rawActive.trim() : undefined;
+    return {
+      config: activePreset === undefined ? { presets } : { activePreset, presets },
+      error: null,
+    };
+  }
+  const rawProfiles = hasProfiles ? record.profiles : undefined;
+  return {
+    config: { profiles: Array.isArray(rawProfiles) ? normalizeProfiles(rawProfiles) : [] },
+    error: null,
+  };
+}
+
+/** Normalize raw JSON for reads and writes; malformed preset envelopes fail closed. */
+export function normalizeConfig(raw: unknown): ModelSyncConfig {
+  return parseConfig(raw).config;
 }

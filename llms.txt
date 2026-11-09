@@ -1,6 +1,6 @@
 # pi-model-sync
 
-> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents plus pi-subagent's `subagent` tool. Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents plus pi-subagent's `subagent` tool. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
 
 ## Install (pick the user's host)
 
@@ -9,7 +9,7 @@
 - git, tag-pinned (either host): `omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.3.1` / `pi install git:github.com/SenCha930511/pi-model-sync@v0.3.1`
 - omp marketplace: `omp plugin marketplace add SenCha930511/omp-marketplace`, then `omp plugin install pi-model-sync@sencha930511`
 
-Verify after installing: start the host and run `/model-sync list` — it prints the active config layer and all profiles.
+Verify after installing: start the host and run `/model-sync list` — it prints the active config layer, the active preset, and that preset's profiles.
 
 ## Minimal config
 
@@ -17,17 +17,26 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 
 ```json
 {
-  "profiles": [
-    { "main": "provider/main-model", "subagents": { "explore": "provider/child-model", "*": "provider/default" } }
-  ]
+  "activePreset": "default",
+  "presets": {
+    "default": [
+      { "main": "provider/main-model", "subagents": { "explore": "provider/child-model", "*": "provider/default" } }
+    ]
+  }
 }
 ```
 
-`main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An explicit per-call `model` in a pi-subagent call is never overwritten.
+`activePreset` picks the preset whose profile list is in effect for that layer; a missing or dangling name routes nothing (fail closed, no fallback). Legacy `{ "profiles": [...] }` files still work as a virtual `default` preset, and the first successful `preset create`/`preset copy` converts them. `main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An agent key with no `*` default is not intercepted. An explicit per-call `model` in a pi-subagent call is never overwritten.
+
+## Commands
+
+- `/model-sync [list]`, `/model-sync show`, `/model-sync add <main> <model>`, `/model-sync set <main> <agent> <model>`, `/model-sync remove <main> [agent]`
+- `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset use <name>`, `/model-sync preset remove <name>`
+- Writes target the global file; add `--project` to write the project file. `add`/`set`/`remove` edit only the active preset; `preset remove` refuses the active preset.
 
 ## Docs
 
-- [README](README.md): install variants, config schema, matching rules, pi-subagent routing rules, `/model-sync` commands, updating
+- [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, pi-subagent routing rules, `/model-sync` commands, updating
 - [CONTRIBUTING](CONTRIBUTING.md)
 - [License](LICENSE): MIT
 - [Releases](https://github.com/SenCha930511/pi-model-sync/releases)

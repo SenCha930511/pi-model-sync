@@ -17,18 +17,25 @@
 // while omp supplies the same ambient ExtensionAPI surface under either name.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  cloneConfig,
+  cloneProfiles,
   cloneSubagentMap,
   configFileExists,
   findProfile,
   getGlobalConfigPath,
+  getPresetProfiles,
   getProjectConfigPath,
+  isNamedConfig,
   pickSubagentSelector,
+  presetNames,
+  projectActiveProfiles,
   readConfig,
   readLayer,
   resolveActiveLayer,
+  toPresetConfig,
   writeConfig,
 } from "./config";
-import type { CurrentModelRef, ModelSyncConfig, Profile, SubagentMap } from "./config";
+import type { CurrentModelRef, EffectiveConfig, ModelSyncConfig, Profile, SubagentMap } from "./config";
 
 /** Selectors already warned about as unresolvable (once per selector). */
 const warnedSelectors = new Set<string>();
@@ -356,12 +363,26 @@ export default function modelSync(pi: ExtensionAPI): void {
   // ── /model-sync command (decisions 5, 9) ─────────────────────────
   const USAGE = [
     "pi-model-sync commands:",
-    "  /model-sync [list]                      Show the active layer and all profiles",
+    "  /model-sync [list]                      Show the active layer, active preset, and all profiles",
     "  /model-sync show                        Show the current model, matched profile, and selector resolution status",
-    "  /model-sync add <main> <model>          Add/update a profile (all subagents use <model>)",
+    "  /model-sync add <main> <model>          Add/update a profile in the active preset (all subagents use <model>)",
     "  /model-sync set <main> <agent> <model>  Set a model for one agent (use * for the profile default)",
     "  /model-sync remove <main> [agent]       Remove a whole profile or one agent entry",
+    "  /model-sync preset list                 List presets in the active layer",
+    "  /model-sync preset create <name>        Create an empty inactive preset",
+    "  /model-sync preset copy <source> <name> Deep-copy a preset without switching to it",
+    "  /model-sync preset use <name>           Select the active preset",
+    "  /model-sync preset remove <name>        Remove an inactive preset",
     "Writes use the global file by default. Add --project to target <cwd>/.omp/pi-model-sync.json (or <cwd>/.pi/pi-model-sync.json when the .omp file is absent and the .pi file exists).",
+  ].join("\n");
+
+  const PRESET_USAGE = [
+    "pi-model-sync preset commands:",
+    "  /model-sync preset list",
+    "  /model-sync preset create <name>",
+    "  /model-sync preset copy <source> <name>",
+    "  /model-sync preset use <name>",
+    "  /model-sync preset remove <name>",
   ].join("\n");
 
   pi.registerCommand("model-sync", {
@@ -428,6 +449,61 @@ export default function modelSync(pi: ExtensionAPI): void {
         cmdRemove(ctx, target, main, agent);
         return;
       }
+      case "preset": {
+        const [action, ...presetArgs] = rest;
+        if (!action) {
+          notify(ctx, PRESET_USAGE);
+          return;
+        }
+        switch (action) {
+          case "list":
+            if (presetArgs.length > 0) {
+              notify(ctx, `Unexpected argument for preset list: ${presetArgs[0]}\n${PRESET_USAGE}`);
+              return;
+            }
+            cmdPresetList(ctx);
+            return;
+          case "create": {
+            const [name] = presetArgs;
+            if (presetArgs.length !== 1 || !name) {
+              notify(ctx, "Usage: /model-sync preset create <name>");
+              return;
+            }
+            cmdPresetCreate(ctx, target, name);
+            return;
+          }
+          case "copy": {
+            const [source, name] = presetArgs;
+            if (presetArgs.length !== 2 || !source || !name) {
+              notify(ctx, "Usage: /model-sync preset copy <source> <name>");
+              return;
+            }
+            cmdPresetCopy(ctx, target, source, name);
+            return;
+          }
+          case "use": {
+            const [name] = presetArgs;
+            if (presetArgs.length !== 1 || !name) {
+              notify(ctx, "Usage: /model-sync preset use <name>");
+              return;
+            }
+            cmdPresetUse(ctx, target, name);
+            return;
+          }
+          case "remove": {
+            const [name] = presetArgs;
+            if (presetArgs.length !== 1 || !name) {
+              notify(ctx, "Usage: /model-sync preset remove <name>");
+              return;
+            }
+            cmdPresetRemove(ctx, target, name);
+            return;
+          }
+          default:
+            notify(ctx, `Unknown preset command: ${action}\n${PRESET_USAGE}`);
+        }
+        return;
+      }
       default:
         notify(ctx, USAGE);
     }
@@ -440,27 +516,38 @@ export default function modelSync(pi: ExtensionAPI): void {
       notify(ctx, `pi-model-sync: ${layer.error}\nRepair or delete this file before running a write command.`);
       return null;
     }
-    return {
-      profiles: layer.config.profiles.map((p) => {
-        if (typeof p.subagents === "string") {
-          return { main: p.main, subagents: p.subagents };
-        }
-        const map = cloneSubagentMap(p.subagents);
-        return { main: p.main, subagents: map };
-      }),
-    };
+    // Full-document clone: every preset and every nested subagent map stays isolated
+    // from the shared cache, not just the active preset.
+    return cloneConfig(layer.config);
+  }
+
+  /** Resolve the active preset on a cloned document; a missing/dangling selection fails closed. */
+  function loadActiveForWrite(
+    ctx: ExtensionContextLike,
+    target: string,
+  ): { config: ModelSyncConfig; profiles: Profile[] } | null {
+    const config = loadForWrite(ctx, target);
+    if (!config) return null;
+    const effective = projectActiveProfiles(config);
+    if (effective.warning || !effective.activePreset) {
+      const warning = effective.warning ?? "No active preset is selected; no profiles are active.";
+      notify(ctx, `pi-model-sync: ${warning}\nNo changes were written (target: ${target}).`);
+      return null;
+    }
+    return { config, profiles: effective.profiles };
   }
 
   function cmdAdd(ctx: ExtensionContextLike, target: string, main: string, model: string): void {
-    const config = loadForWrite(ctx, target);
-    if (!config) return;
+    const loaded = loadActiveForWrite(ctx, target);
+    if (!loaded) return;
+    const { config, profiles } = loaded;
     const mainLower = main.toLowerCase();
-    const existing = config.profiles.find((p) => p.main.toLowerCase() === mainLower);
+    const existing = profiles.find((p) => p.main.toLowerCase() === mainLower);
     if (existing) {
       existing.main = main;
       existing.subagents = model;
     } else {
-      config.profiles.push({ main, subagents: model });
+      profiles.push({ main, subagents: model });
     }
     writeConfig(target, config);
     notify(ctx, `Saved to ${target}\n  ${main} → ${model}`);
@@ -473,10 +560,11 @@ export default function modelSync(pi: ExtensionAPI): void {
     agent: string,
     model: string,
   ): void {
-    const config = loadForWrite(ctx, target);
-    if (!config) return;
+    const loaded = loadActiveForWrite(ctx, target);
+    if (!loaded) return;
+    const { config, profiles } = loaded;
     const mainLower = main.toLowerCase();
-    const existing = config.profiles.find((p) => p.main.toLowerCase() === mainLower);
+    const existing = profiles.find((p) => p.main.toLowerCase() === mainLower);
     const profile: Profile = existing ?? { main, subagents: Object.create(null) as SubagentMap };
     if (agent === "*") {
       // Profile default: preserve existing per-agent entries; collapse to the plain
@@ -495,7 +583,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       map[agent] = model;
       profile.subagents = map;
     }
-    if (!existing) config.profiles.push(profile);
+    if (!existing) profiles.push(profile);
     writeConfig(target, config);
     notify(ctx, `Saved to ${target}\n  ${main} → ${summarizeSubagents(profile.subagents)}`);
   }
@@ -506,15 +594,16 @@ export default function modelSync(pi: ExtensionAPI): void {
     main: string,
     agent: string | undefined,
   ): void {
-    const config = loadForWrite(ctx, target);
-    if (!config) return;
+    const loaded = loadActiveForWrite(ctx, target);
+    if (!loaded) return;
+    const { config, profiles } = loaded;
     const mainLower = main.toLowerCase();
-    const idx = config.profiles.findIndex((p) => p.main.toLowerCase() === mainLower);
+    const idx = profiles.findIndex((p) => p.main.toLowerCase() === mainLower);
     if (idx < 0) {
       notify(ctx, `No profile found for main ${main} (target: ${target})`);
       return;
     }
-    const profile = config.profiles[idx];
+    const profile = profiles[idx];
     if (agent) {
       if (typeof profile.subagents === "string") {
         notify(ctx, `This profile has a single default model; use /model-sync remove ${main}`);
@@ -529,7 +618,7 @@ export default function modelSync(pi: ExtensionAPI): void {
       delete map[agent];
       const keys = Object.keys(map);
       if (keys.length === 0) {
-        config.profiles.splice(idx, 1);
+        profiles.splice(idx, 1);
       } else if (keys.length === 1 && keys[0] === "*") {
         // A lone default collapses back to the plain string form.
         profile.subagents = map["*"];
@@ -537,37 +626,204 @@ export default function modelSync(pi: ExtensionAPI): void {
         profile.subagents = map;
       }
     } else {
-      config.profiles.splice(idx, 1);
+      profiles.splice(idx, 1);
     }
     writeConfig(target, config);
     notify(ctx, `Saved to ${target}`);
   }
 
+  function formatActivePreset(config: ModelSyncConfig, effective: EffectiveConfig): string {
+    if (!effective.activePreset) return "(none)";
+    return isNamedConfig(config) ? effective.activePreset : `${effective.activePreset} (legacy)`;
+  }
+
+  function validPresetName(name: string): boolean {
+    return name.length > 0 && !/\s/.test(name);
+  }
+
+  function cmdPresetList(ctx: ExtensionContextLike): void {
+    const layer = resolveActiveLayer(ctx.cwd);
+    const active = readLayer(layer.path);
+    const effective = projectActiveProfiles(active.config);
+    const lines: string[] = [];
+    lines.push(`pi-model-sync active layer: ${layer.layer} — ${layer.path}`);
+    if (active.error) {
+      lines.push(active.error);
+      notify(ctx, lines.join("\n"));
+      return;
+    }
+    lines.push(`Active preset: ${formatActivePreset(active.config, effective)}`);
+    if (effective.warning) lines.push(effective.warning);
+    const names = presetNames(active.config);
+    if (names.length === 0) {
+      lines.push("No presets yet (/model-sync preset create <name>)");
+    } else {
+      const legacySuffix = isNamedConfig(active.config) ? "" : " (legacy)";
+      for (const name of names) {
+        lines.push(`  ${effective.activePreset === name ? "*" : " "} ${name}${legacySuffix}`);
+      }
+    }
+    notify(ctx, lines.join("\n"));
+  }
+
+  function cmdPresetCreate(ctx: ExtensionContextLike, target: string, name: string): void {
+    if (!validPresetName(name)) {
+      notify(ctx, `Invalid preset name "${name}". Preset names must be single tokens.`);
+      return;
+    }
+    const config = loadForWrite(ctx, target);
+    if (!config) return;
+    if (!isNamedConfig(config)) {
+      if (name === "default") {
+        notify(ctx, `Preset "default" is the virtual legacy preset and cannot be created (target: ${target}).`);
+        return;
+      }
+      const converted = toPresetConfig(config);
+      converted.presets[name] = [];
+      writeConfig(target, converted);
+      notify(ctx, `Created preset "${name}" (inactive) in ${target}\nLegacy profiles moved to preset "default" (active).`);
+      return;
+    }
+    if (Object.hasOwn(config.presets, name)) {
+      notify(ctx, `Preset "${name}" already exists (target: ${target}).`);
+      return;
+    }
+    config.presets[name] = [];
+    writeConfig(target, config);
+    notify(ctx, `Created preset "${name}" (inactive) in ${target}`);
+  }
+
+  function cmdPresetCopy(ctx: ExtensionContextLike, target: string, source: string, name: string): void {
+    if (!validPresetName(source) || !validPresetName(name)) {
+      notify(ctx, `Invalid preset name. Preset names must be single tokens.`);
+      return;
+    }
+    const config = loadForWrite(ctx, target);
+    if (!config) return;
+    if (!isNamedConfig(config)) {
+      if (name === "default") {
+        notify(ctx, `Preset "default" already exists (target: ${target}).`);
+        return;
+      }
+      if (source !== "default") {
+        notify(ctx, `Preset "${source}" not found (target: ${target}).`);
+        return;
+      }
+      const converted = toPresetConfig(config);
+      converted.presets[name] = cloneProfiles(converted.presets.default);
+      writeConfig(target, converted);
+      notify(ctx, `Copied preset "default" to "${name}" (inactive) in ${target}\nLegacy profiles moved to preset "default" (active).`);
+      return;
+    }
+    if (Object.hasOwn(config.presets, name)) {
+      notify(ctx, `Preset "${name}" already exists (target: ${target}).`);
+      return;
+    }
+    const sourceProfiles = getPresetProfiles(config, source);
+    if (!sourceProfiles) {
+      notify(ctx, `Preset "${source}" not found (target: ${target}).`);
+      return;
+    }
+    config.presets[name] = cloneProfiles(sourceProfiles);
+    writeConfig(target, config);
+    notify(ctx, `Copied preset "${source}" to "${name}" (inactive) in ${target}`);
+  }
+
+  function cmdPresetUse(ctx: ExtensionContextLike, target: string, name: string): void {
+    if (!validPresetName(name)) {
+      notify(ctx, `Invalid preset name "${name}". Preset names must be single tokens.`);
+      return;
+    }
+    const config = loadForWrite(ctx, target);
+    if (!config) return;
+    if (!isNamedConfig(config)) {
+      if (name === "default") {
+        notify(ctx, `Preset "default" is already active (legacy config; target: ${target}).`);
+        return;
+      }
+      notify(ctx, `Preset "${name}" not found (target: ${target}).`);
+      return;
+    }
+    if (!Object.hasOwn(config.presets, name)) {
+      notify(ctx, `Preset "${name}" not found (target: ${target}).`);
+      return;
+    }
+    if (config.activePreset === name) {
+      notify(ctx, `Preset "${name}" is already active (target: ${target}).`);
+      return;
+    }
+    config.activePreset = name;
+    writeConfig(target, config);
+    notify(ctx, `Active preset: ${name} (${target})`);
+  }
+
+  function cmdPresetRemove(ctx: ExtensionContextLike, target: string, name: string): void {
+    if (!validPresetName(name)) {
+      notify(ctx, `Invalid preset name "${name}". Preset names must be single tokens.`);
+      return;
+    }
+    const config = loadForWrite(ctx, target);
+    if (!config) return;
+    if (!isNamedConfig(config)) {
+      if (name === "default") {
+        notify(ctx, `Cannot remove the active virtual legacy preset "default" (target: ${target}).`);
+        return;
+      }
+      notify(ctx, `Preset "${name}" not found (target: ${target}).`);
+      return;
+    }
+    if (!Object.hasOwn(config.presets, name)) {
+      notify(ctx, `Preset "${name}" not found (target: ${target}).`);
+      return;
+    }
+    if (config.activePreset === name) {
+      notify(ctx, `Cannot remove the active preset "${name}" (target: ${target}).`);
+      return;
+    }
+    delete config.presets[name];
+    writeConfig(target, config);
+    notify(ctx, `Removed preset "${name}" (${target})`);
+  }
+
   function cmdList(ctx: ExtensionContextLike): void {
     const layer = resolveActiveLayer(ctx.cwd);
     const active = readLayer(layer.path);
+    const effective = projectActiveProfiles(active.config);
     const lines: string[] = [];
     lines.push(
       `pi-model-sync active layer: ${layer.layer} — ${layer.path}`,
     );
-    if (active.error) lines.push(active.error);
-    const modelRef = currentModelRef(ctx);
-    const hit = findProfile(active.config, modelRef);
-    if (active.config.profiles.length === 0) {
-      lines.push("No profiles yet (/model-sync add <main> <model>)");
+    if (active.error) {
+      lines.push(active.error);
+      lines.push("No profiles are active because the active config has an error.");
     } else {
-      for (const profile of active.config.profiles) {
-        lines.push(`  ${hit === profile ? "*" : " "} ${profile.main} → ${summarizeSubagents(profile.subagents)}`);
+      lines.push(`Active preset: ${formatActivePreset(active.config, effective)}`);
+      if (effective.warning) lines.push(effective.warning);
+      const modelRef = currentModelRef(ctx);
+      const hit = findProfile(effective, modelRef);
+      if (effective.profiles.length === 0) {
+        lines.push("No profiles in the active preset (/model-sync add <main> <model>)");
+      } else {
+        for (const profile of effective.profiles) {
+          lines.push(`  ${hit === profile ? "*" : " "} ${profile.main} → ${summarizeSubagents(profile.subagents)}`);
+        }
       }
     }
     const otherPath =
       layer.layer === "project" ? getGlobalConfigPath(ctx.cwd) : getProjectConfigPath(ctx.cwd);
     if (otherPath !== layer.path && configFileExists(otherPath)) {
       const other = readLayer(otherPath);
+      const otherEffective = projectActiveProfiles(other.config);
       lines.push(`(inactive) ${layer.layer === "project" ? "global" : "project"} layer: ${otherPath}`);
       if (other.error) lines.push(`  ${other.error}`);
-      for (const profile of other.config.profiles) {
-        lines.push(`      ${profile.main} → ${summarizeSubagents(profile.subagents)}`);
+      lines.push(`  Active preset: ${formatActivePreset(other.config, otherEffective)}`);
+      if (otherEffective.warning) lines.push(`  ${otherEffective.warning}`);
+      if (otherEffective.profiles.length === 0) {
+        lines.push("  No profiles in the inactive layer");
+      } else {
+        for (const profile of otherEffective.profiles) {
+          lines.push(`      ${profile.main} → ${summarizeSubagents(profile.subagents)}`);
+        }
       }
     }
     notify(ctx, lines.join("\n"));
@@ -590,13 +846,18 @@ export default function modelSync(pi: ExtensionAPI): void {
       : "(unknown)";
     const layer = resolveActiveLayer(ctx.cwd);
     const active = readLayer(layer.path);
+    const effective = projectActiveProfiles(active.config);
     const lines: string[] = [];
     lines.push(`Current session model: ${current}`);
-    lines.push(
-      `Active layer: ${layer.layer} — ${layer.path}`,
-    );
-    if (active.error) lines.push(active.error);
-    const profile = findProfile(active.config, modelRef);
+    lines.push(`Active layer: ${layer.layer} — ${layer.path}`);
+    if (active.error) {
+      lines.push(active.error);
+      notify(ctx, lines.join("\n"));
+      return;
+    }
+    lines.push(`Active preset: ${formatActivePreset(active.config, effective)}`);
+    if (effective.warning) lines.push(effective.warning);
+    const profile = findProfile(effective, modelRef);
     if (!profile) {
       lines.push(`No matching profile for the current model ${current}`);
     } else {
