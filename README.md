@@ -21,8 +21,11 @@ No build, no dependencies — both hosts run the TypeScript sources directly.
 ### omp
 
 ```sh
-# from git (pin a tag for a fixed version)
-omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.4.0
+# from the omp marketplace
+omp plugin marketplace add SenCha930511/omp-marketplace
+omp plugin install pi-model-sync@sencha930511
+# or from git (pin a tag for a fixed version)
+omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.4.1
 # or from npm (the same package feeds the Pi gallery)
 omp plugin install npm:@sencha930511/pi-model-sync
 ```
@@ -33,7 +36,7 @@ omp plugin install npm:@sencha930511/pi-model-sync
 # from npm (listed in the Pi package gallery at pi.dev/packages)
 pi install npm:@sencha930511/pi-model-sync
 # or straight from git
-pi install git:github.com/SenCha930511/pi-model-sync@v0.4.0
+pi install git:github.com/SenCha930511/pi-model-sync@v0.4.1
 ```
 
 One-off trial without installing: `omp --extension /path/to/pi-model-sync` / `pi --extension /path/to/pi-model-sync` (`-e` is repeatable; `pi -e npm:@sencha930511/pi-model-sync` works too).
@@ -186,6 +189,8 @@ All command help, output, notifications, and config error messages are in Englis
 
 Commands reject extra arguments with a usage hint. Writes target the **global** file by default; any subcommand with `--project` writes the **project** file. `add`, `set`, and `remove` edit only the active preset of the target layer and refuse to write when no preset is active; `preset create` and `preset copy` leave the active profiles unchanged; `preset list` always reports the active layer, so `--project` does not change its output. You can also edit the JSON directly (changes are detected via an mtime+size cache and take effect on save).
 
+Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. `preset use`, `preset remove`, and the source argument of `preset copy` also suggest existing preset names from the target config layer. Preset names are global by default; include `--project` before the name to complete project-layer names.
+
 ## Updating
 
 No self-update machinery — the hosts' package managers own updates:
@@ -195,6 +200,7 @@ No self-update machinery — the hosts' package managers own updates:
 | `pi install npm:...` | `pi update --extensions` (or `pi update --all`) |
 | `pi install git:...@vX.Y.Z` | Pinned by ref: reinstall with a newer tag to move |
 | `omp plugin install npm:...` | `omp plugin upgrade pi-model-sync` |
+| `omp plugin install pi-model-sync@sencha930511` | `omp plugin upgrade pi-model-sync@sencha930511` |
 | `omp plugin install git:...` / copied directory | `git pull` / re-copy |
 
 ## Notes

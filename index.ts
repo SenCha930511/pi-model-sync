@@ -68,6 +68,13 @@ interface ExtensionContextLike {
   ui: UiFacade;
 }
 
+/** Host autocomplete item shape; kept local so only ExtensionAPI is imported from the host. */
+interface ArgumentCompletion {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 /** omp CustomToolCallEvent shape (upstream pi's tool_call event is isomorphic; only these two fields are used). */
 interface ToolCallEventLike {
   toolName?: unknown;
@@ -385,8 +392,80 @@ export default function modelSync(pi: ExtensionAPI): void {
     "  /model-sync preset remove <name>",
   ].join("\n");
 
+  const TOP_LEVEL_COMPLETIONS: ArgumentCompletion[] = [
+    { value: "list", label: "list", description: "Show the active layer, active preset, and profiles" },
+    { value: "show", label: "show", description: "Show the current model, matched profile, and selector status" },
+    { value: "add ", label: "add", description: "Add/update a profile in the active preset" },
+    { value: "set ", label: "set", description: "Set a model for one agent in the active preset" },
+    { value: "remove ", label: "remove", description: "Remove a profile or agent entry from the active preset" },
+    { value: "preset ", label: "preset", description: "List, create, copy, use, or remove presets" },
+  ];
+
+  const PRESET_COMPLETIONS: ArgumentCompletion[] = [
+    { value: "preset list", label: "list", description: "List presets in the active layer" },
+    { value: "preset create ", label: "create", description: "Create an empty inactive preset" },
+    { value: "preset copy ", label: "copy", description: "Deep-copy a preset without switching" },
+    { value: "preset use ", label: "use", description: "Select the active preset" },
+    { value: "preset remove ", label: "remove", description: "Remove an inactive preset" },
+  ];
+
+  /** Suggest subcommands and, for preset operations, names from the target config layer. */
+  function modelSyncArgumentCompletions(argumentPrefix: string): ArgumentCompletion[] | null {
+    try {
+      const tokens = argumentPrefix.trim().split(/\s+/).filter((token) => token.length > 0);
+      const hasTrailingSpace = /\s$/.test(argumentPrefix);
+      const current = hasTrailingSpace ? "" : tokens.pop() ?? "";
+      const useProject = tokens.includes("--project") || current === "--project";
+      const commandTokens = tokens.filter((token) => token !== "--project");
+      const [sub, ...rest] = commandTokens;
+
+      if (current.startsWith("-")) {
+        if (!"--project".startsWith(current)) return null;
+        const beforeCurrent = argumentPrefix.slice(0, argumentPrefix.length - current.length);
+        return [{ value: `${beforeCurrent}--project`, label: "--project", description: "Target the project config" }];
+      }
+
+      if (!sub) {
+        const filtered = TOP_LEVEL_COMPLETIONS.filter((item) => item.label.startsWith(current));
+        return filtered.length > 0 ? filtered : null;
+      }
+
+      if (sub !== "preset") return null;
+
+      const [action, ...actionArgs] = rest;
+      if (!action) {
+        const filtered = PRESET_COMPLETIONS.filter((item) => item.label.startsWith(current));
+        return filtered.length > 0 ? filtered : null;
+      }
+      if (action !== "use" && action !== "remove" && action !== "copy") return null;
+      if (actionArgs.length > 0) return null;
+
+      const target = useProject ? getProjectConfigPath(process.cwd()) : getGlobalConfigPath(process.cwd());
+      const layer = readLayer(target);
+      if (layer.error) return null;
+      const active = isNamedConfig(layer.config) ? layer.config.activePreset : "default";
+      const items: ArgumentCompletion[] = [];
+      for (const name of presetNames(layer.config)) {
+        if (!name.startsWith(current)) continue;
+        let description = "preset";
+        if (name === active) {
+          description = action === "use" ? "already active" : action === "remove" ? "active; switch away before removing" : "active preset";
+        }
+        items.push({
+          value: `preset ${action} ${name}${useProject ? " --project" : ""}`,
+          label: name,
+          description,
+        });
+      }
+      return items.length > 0 ? items : null;
+    } catch {
+      return null;
+    }
+  }
+
   pi.registerCommand("model-sync", {
     description: "Manage main-model → subagent model mappings",
+    getArgumentCompletions: modelSyncArgumentCompletions,
     handler: async (argsString: string, ctx: ExtensionContextLike) => {
       try {
         await handleCommand(String(argsString ?? ""), ctx);
