@@ -25,7 +25,7 @@ No build, no dependencies — both hosts run the TypeScript sources directly.
 omp plugin marketplace add SenCha930511/omp-marketplace
 omp plugin install pi-model-sync@sencha930511
 # or from git (pin a tag for a fixed version)
-omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.4.1
+omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.4.2
 # or from npm (the same package feeds the Pi gallery)
 omp plugin install npm:@sencha930511/pi-model-sync
 ```
@@ -36,7 +36,7 @@ omp plugin install npm:@sencha930511/pi-model-sync
 # from npm (listed in the Pi package gallery at pi.dev/packages)
 pi install npm:@sencha930511/pi-model-sync
 # or straight from git
-pi install git:github.com/SenCha930511/pi-model-sync@v0.4.1
+pi install git:github.com/SenCha930511/pi-model-sync@v0.4.2
 ```
 
 One-off trial without installing: `omp --extension /path/to/pi-model-sync` / `pi --extension /path/to/pi-model-sync` (`-e` is repeatable; `pi -e npm:@sencha930511/pi-model-sync` works too).

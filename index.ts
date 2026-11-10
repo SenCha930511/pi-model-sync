@@ -241,7 +241,7 @@ function warnUnresolvableOnce(ctx: ExtensionContextLike, selector: string, tail:
  * Decision 11 eligibility probe: the trimmed agent name when `call` is a plain object
  * without an explicit non-blank string model and with a non-blank string agent name;
  * undefined otherwise (arrays and primitives are never call records). Shared by the
- * hot-path pre-scan and the injection loop so the two can never disagree.
+ * leading scan and the injection loop, which starts at the first eligible call.
  */
 function eligibleCallAgent(call: unknown): string | undefined {
   if (!call || typeof call !== "object" || Array.isArray(call)) return undefined;
@@ -325,9 +325,10 @@ export default function modelSync(pi: ExtensionAPI): void {
       const inputRecord = input as Record<string, unknown>;
       const calls = inputRecord.calls;
       if (!Array.isArray(calls) || calls.length === 0) return undefined;
-      // Hot-path short-circuit (decision 11): when every call already carries an explicit
-      // model there is nothing to inject — skip the model lookup and config read entirely.
-      if (!calls.some(eligibleCallAgent)) return undefined;
+      // Hot-path short-circuit (decision 11): no eligible call means no model lookup or
+      // config read. Injection starts at the first hit so ineligible prefixes are checked once.
+      const firstEligible = calls.findIndex(eligibleCallAgent);
+      if (firstEligible < 0) return undefined;
       const modelRef = currentModelRef(ctx);
       if (!modelRef) return undefined;
       const profile = findProfile(readConfig(ctx.cwd), modelRef);
@@ -336,10 +337,9 @@ export default function modelSync(pi: ExtensionAPI): void {
       // Per-event memo (dynamic insert → Map): a batch often repeats the same agent or
       // "*" default; validate each unique selector once (registry scans are not free upstream).
       const resolutionCache = new Map<string, boolean | undefined>();
-      for (const call of calls) {
-        // Decision 11: an explicit per-call model always wins and is never overwritten;
-        // eligibility (plain object, no explicit model, non-blank agent) is shared with
-        // the pre-scan so the two can never disagree.
+      for (let index = firstEligible; index < calls.length; index += 1) {
+        const call = calls[index];
+        // Decision 11: an explicit per-call model always wins and is never overwritten.
         const agentName = eligibleCallAgent(call);
         if (!agentName) continue;
         // Guarded as an object inside eligibleCallAgent; only `model` is written below.
