@@ -164,6 +164,8 @@ Routing on the spawn path is silent when it fails closed; `/model-sync list` and
 
 At `tool_call` time the extension identifies the plugin behind the call and injects a model only when that call has none. Identification uses the tool's registered JSON Schema (`pi.getAllTools()`) first. Each adapter requires a set of property names and rejects others, so same-named tools are separated. A host without `getAllTools()`, or a schema that no longer matches, falls back to a stricter call-shape check.
 
+Routing starts only after the host registers the plugin's tool. A plugin that fails to load on your host version never reaches this layer, so check that plugin's own host requirements first. For example, `pi-subagents@0.88.1` needs a host that exports the TUI `MouseRegion` API, which omp 18.20.3 does not.
+
 | Plugin | Tool | Agent key | Selector handling |
 |---|---|---|---|
 | `@mjakl/pi-subagent` | `subagent` (`calls[]`) | `call.agent` | Passed through verbatim: `@alias`, glob, `:level`, bare id |
