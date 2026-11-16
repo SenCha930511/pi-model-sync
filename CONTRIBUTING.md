@@ -49,6 +49,8 @@ Open a real pull request against `main`.
 
 The `main` ruleset is designed around four required checks: `verify`, `portability (macos-15)`, `portability (windows-2025)`, and `pr-title`, with strict up-to-date branch checks enabled. For a solo maintainer, do not enable `prevent-self-review` on the protected `npm-publish` environment.
 
+The `main` ruleset allows **rebase merges only** and requires linear history. A rebase merge preserves every PR commit; tag a release after the PR is merged, on the resulting main commit.
+
 The `pr-title` workflow uses `pull_request_target`. Public repositories must allow that event in a repository Actions policy before 2026-12-02, or the required `pr-title` check will be blocked.
 
 `.github/CODEOWNERS` names the maintainer. `require_code_owner_review` stays off while the repository has one maintainer, because GitHub does not count a self-approval. Enable it when a second maintainer or team is added.
@@ -69,7 +71,7 @@ PR validation and releases are separate. Never create a tag or publish a package
    - `AGENTS.md` (`MIT license, vX.Y.Z, published to npm as`)
 3. Add release notes to `CHANGELOG.md`. The first visible `##` heading after `# Changelog` must be `## X.Y.Z — YYYY-MM-DD` with a valid calendar date and a non-empty section body.
 4. Run `npm run check` and `node scripts/check-release-versions.mjs --release --tag vX.Y.Z`.
-5. Merge the release preparation PR through `main`, then push the `vX.Y.Z` tag to `SenCha930511/pi-model-sync`.
+5. Merge the release preparation PR through `main` with a rebase merge, then push the `vX.Y.Z` tag on the resulting main commit to `SenCha930511/pi-model-sync`.
 
 ### Protected tag workflow
 
