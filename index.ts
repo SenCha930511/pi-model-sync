@@ -275,14 +275,16 @@ function selectorResolvable(
 }
 
 /**
- * nicobailon accepts a bare id only when exactly one provider exposes it. Upstream pi
- * exposes the full registry, so count the providers. omp's resolve() picks one model
- * and hides the rest, so trust it there. undefined → this host cannot tell.
+ * nicobailon accepts a bare id when exactly one provider exposes it, or when the
+ * spawning session's provider is one of the candidates. Upstream pi exposes the full
+ * registry, so count the providers. omp's resolve() picks one model and hides the
+ * rest, so trust it there. undefined → this host cannot tell.
  */
 function bareSelectorUnique(
   ctx: ExtensionContextLike,
   selector: string,
   snapshot: RegistrySnapshot,
+  modelRef: CurrentModelRef | undefined,
 ): boolean | undefined {
   let base = selector;
   const colon = base.lastIndexOf(":");
@@ -298,6 +300,7 @@ function bareSelectorUnique(
     if (modelId(entry) === base) providers.add(modelProvider(entry));
   }
   if (providers.size === 0) return undefined;
+  if (modelRef && providers.has(modelRef.provider)) return true;
   return providers.size === 1;
 }
 
@@ -460,7 +463,7 @@ function handleToolCall(
       }
       if (selection.adapter.dialect.uniqueBareId) {
         registrySnapshot ??= createRegistrySnapshot();
-        if (bareSelectorUnique(ctx, spec.base, registrySnapshot) === false) {
+        if (bareSelectorUnique(ctx, spec.base, registrySnapshot, modelRef) === false) {
           warnUnresolvableOnce(
             ctx,
             selector,

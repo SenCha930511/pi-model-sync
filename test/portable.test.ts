@@ -550,7 +550,7 @@ describe("extension hooks (omp & upstream pi)", () => {
     const cfg = path.join(dir, "sync.json");
     process.env.PI_MODEL_SYNC_CONFIG = cfg;
     writeConfig(cfg, {
-      profiles: [{ main: "openai/gpt-6", subagents: { scout: "gpt-x" } }],
+      profiles: [{ main: "*", subagents: { scout: "gpt-x" } }],
     });
 
     const tool = {
@@ -567,7 +567,7 @@ describe("extension hooks (omp & upstream pi)", () => {
     const ctx = {
       cwd: dir,
       mode: "tui",
-      model: { provider: "openai", id: "gpt-6" },
+      model: { provider: "google", id: "gpt-6" },
       modelRegistry: {
         getAvailable: () => [
           { provider: "openai", id: "gpt-x" },
@@ -581,6 +581,13 @@ describe("extension hooks (omp & upstream pi)", () => {
     expect(host.emitToolCall({ toolName: "subagent", input: ambiguous }, ctx)).toBeUndefined();
     expect("model" in ambiguous).toBe(false);
     expect(warnings.some((message) => message.includes("matches more than one provider"))).toBe(true);
+
+    const preferred: Record<string, unknown> = { agent: "scout" };
+    host.emitToolCall(
+      { toolName: "subagent", input: preferred },
+      { ...ctx, model: { provider: "openai", id: "gpt-6" } },
+    );
+    expect(preferred.model).toBe("gpt-x");
 
     const uniqueCtx = {
       ...ctx,

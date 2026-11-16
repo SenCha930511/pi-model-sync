@@ -167,7 +167,7 @@ At `tool_call` time the extension identifies the plugin behind the call and inje
 | Plugin | Tool | Agent key | Selector handling |
 |---|---|---|---|
 | `@mjakl/pi-subagent` | `subagent` (`calls[]`) | `call.agent` | Passed through verbatim: `@alias`, glob, `:level`, bare id |
-| `pi-subagents` (nicobailon) | `subagent` (`agent`, `tasks[]`, `chain[]`, `workflow`) | `agent` per slot; `*` for a workflow | `provider/id`, bare id when one provider exposes it, `:level` suffix; no `@alias` or glob |
+| `pi-subagents` (nicobailon) | `subagent` (`agent`, `tasks[]`, `chain[]`, `workflow`) | `agent` per slot; `*` for a workflow | `provider/id`, bare id when unique or the spawning provider disambiguates, `:level` suffix; no `@alias` or glob |
 | `@tintinweb/pi-subagents` | `Agent` | `subagent_type` | `provider/id` or fuzzy name; `:level` split into `thinking`; no `@alias` or glob |
 | `@gotgenes/pi-subagents` | `subagent` | `subagent_type` | Same as `@tintinweb` |
 | `pi-interactive-subagents` (HazAT) | `subagent` | `agent`, else `*` | `provider/id`; `:level` stripped (the plugin appends its own thinking level) |
