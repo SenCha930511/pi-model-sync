@@ -38,6 +38,7 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 ## Docs
 
 - [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, pi-subagent routing rules, `/model-sync` commands, updating
-- [CONTRIBUTING](CONTRIBUTING.md)
+- [Changelog](https://github.com/SenCha930511/pi-model-sync/blob/main/CHANGELOG.md)
+- [CONTRIBUTING](https://github.com/SenCha930511/pi-model-sync/blob/main/CONTRIBUTING.md)
 - [License](LICENSE): MIT
 - [Releases](https://github.com/SenCha930511/pi-model-sync/releases)

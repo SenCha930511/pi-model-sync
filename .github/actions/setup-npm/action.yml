@@ -1,0 +1,19 @@
+name: Setup npm
+description: Install the pinned npm version.
+
+inputs:
+  npm-version:
+    description: npm version
+    default: "11.21.2"
+
+outputs:
+  version:
+    description: Installed npm version
+    value: ${{ inputs.npm-version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install npm
+      shell: bash
+      run: npm install --global "npm@${{ inputs.npm-version }}"

@@ -1,0 +1,53 @@
+name: Setup toolchain
+description: Install the pinned Node.js, Bun, npm, and CI tools.
+
+inputs:
+  node-version:
+    description: Node.js version
+    default: "22.19.0"
+  bun-version:
+    description: Bun version
+    default: "1.4.4"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: .github/omp-tools/package-lock.json
+
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    - name: Set up npm
+      id: npm
+      uses: ./.github/actions/setup-npm
+
+    - name: Install CI tools
+      shell: bash
+      run: |
+        npm ci --prefix "$GITHUB_WORKSPACE/.github/omp-tools" --no-audit --no-fund
+        omp_bin="$GITHUB_WORKSPACE/.github/omp-tools/node_modules/.bin"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          global_bin=$(npm prefix -g)
+        else
+          global_bin="$(npm prefix -g)/bin"
+        fi
+        printf '\n%s\n%s\n' "$global_bin" "$omp_bin" >> "$GITHUB_PATH"
+
+    - name: Verify tool versions
+      shell: bash
+      run: |
+        expected_omp=$(node -p 'require("./.github/omp-tools/package.json").dependencies["@oh-my-pi/pi-coding-agent"]')
+        expected_tsc=$(node -p 'require("./.github/omp-tools/package.json").dependencies["typescript"]')
+        printf '%s\n' "node $(node --version)" "npm $(npm --version)" "bun $(bun --version)" "$(omp --version)" "tsc $(tsc --version)"
+        test "$(node --version)" = "v${{ inputs.node-version }}"
+        test "$(npm --version)" = "${{ steps.npm.outputs.version }}"
+        test "$(bun --version)" = "${{ inputs.bun-version }}"
+        test "$(omp --version)" = "omp/$expected_omp"
+        test "$(tsc --version)" = "Version $expected_tsc"

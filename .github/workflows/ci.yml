@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Prepare isolated home
+        run: mkdir -p "$RUNNER_TEMP/omp-home"
+
+      - name: Run isolated-home verification
+        env:
+          HOME: ${{ runner.temp }}/omp-home
+          USERPROFILE: ${{ runner.temp }}/omp-home
+        run: npm run check
+
+  portability:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Prepare isolated home
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/omp-home"
+
+      - name: Run full macOS verification
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/omp-home
+          USERPROFILE: ${{ runner.temp }}/omp-home
+        run: npm run check
+
+      - name: Run cross-platform verification
+        if: runner.os != 'macOS'
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/omp-home
+          USERPROFILE: ${{ runner.temp }}/omp-home
+        run: npm run check:portable

@@ -2,6 +2,7 @@
   "name": "@sencha930511/pi-model-sync",
   "version": "0.5.0",
   "license": "MIT",
+  "type": "module",
   "description": "Route subagent models based on the spawning session model (omp & upstream pi, incl. pi-subagent)",
   "keywords": ["pi-package", "pi-extension", "omp", "subagent", "model-routing"],
   "files": ["index.ts", "config.ts", "llms.txt"],
@@ -9,8 +10,30 @@
     "type": "git",
     "url": "git+https://github.com/SenCha930511/pi-model-sync.git"
   },
+  "homepage": "https://github.com/SenCha930511/pi-model-sync#readme",
+  "bugs": {
+    "url": "https://github.com/SenCha930511/pi-model-sync/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "typecheck": "node scripts/typecheck.mjs",
+    "check:versions": "node scripts/check-release-versions.mjs",
+    "release:bump": "node scripts/bump-release.mjs",
+    "test:graph": "bun scripts/test-load-graph.ts",
+    "test:unit": "bun test test/portable.test.ts",
+    "test:posix": "bun test test/posix.test.ts",
+    "test:release-scripts": "node --test scripts/test-check-release-versions.mjs scripts/test-bump-release.mjs scripts/test-verify-release-tarball.mjs",
+    "test:packed": "node scripts/test-packed.mjs",
+    "check:portable": "npm run typecheck && npm run check:versions && npm run test:release-scripts && npm run test:graph && npm run test:unit && npm run test:packed",
+    "check:posix": "npm run test:posix",
+    "check": "npm run check:portable && npm run check:posix",
+    "prepublishOnly": "npm run check"
   },
   "omp": { "extensions": ["./index.ts"] },
   "pi": { "extensions": ["./index.ts"] }

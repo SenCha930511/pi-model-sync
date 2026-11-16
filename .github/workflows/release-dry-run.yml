@@ -1,0 +1,26 @@
+name: Release dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to verify without publishing
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: release-verify
+    uses: ./.github/workflows/release-verify.yml
+    with:
+      tag: ${{ inputs.tag }}
+      artifact_name: npm-tarball-dry-run
+    permissions:
+      contents: read

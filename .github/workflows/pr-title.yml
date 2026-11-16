@@ -1,0 +1,36 @@
+name: PR title
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate pull request title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        # This workflow runs from the base branch on pull_request_target, so the inline check cannot be rewritten by the PR.
+        run: |
+          node -e '
+            const title = process.env.PR_TITLE ?? "";
+            const pattern = /^(?:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\([a-z0-9._/-]+\))?: \S.*$/;
+            if (!pattern.test(title) || title.endsWith(".")) {
+              console.error(`Invalid PR title: ${JSON.stringify(title)}`);
+              console.error("Expected: <type>: <summary> (lowercase conventional prefix, no trailing period)");
+              process.exit(1);
+            }
+          '

@@ -52,11 +52,19 @@ Flat two-module design; the only inter-file dependency is `index.ts → ./config
 
 ## Key Directories
 
-None. The repo is flat (9 tracked files). See **Important Files**.
+- `.github/`: GitHub Actions workflows (`ci.yml`, `pr-title.yml`, `release-verify.yml`, `release-dry-run.yml`, `release.yml`), composite actions (`setup-toolchain`, `setup-npm`), isolated CI tool lockfile (`.github/omp-tools/`), Dependabot config, and PR template. The `pr-title` workflow uses `pull_request_target`; public repositories must allow that event in an Actions policy before 2026-12-02. The release workflow uses npm Trusted Publishing; enable `Allow npm publish` on the trusted publisher.
+- `scripts/`: zero-dependency Node/Bun verification and release helpers (`typecheck.mjs`, `host-stub.d.ts`, `tsconfig.typecheck.json`, `test-load-graph.ts`, `test-packed.mjs`, `check-release-versions.mjs`, `bump-release.mjs`, `verify-release-tarball.mjs`, and `test-*.mjs` unit tests).
+- `test/`: automated Bun behavioral tests (`portable.test.ts`, `posix.test.ts`).
 
 ## Development Commands
 
-`package.json` has **no `scripts`, no dependencies, no devDependencies**; no install, build, lint, or test commands exist. Do not run `npm install`/`bun install`; there is intentionally no lockfile or `node_modules`. The package ships `index.ts`, `config.ts`, and `llms.txt` via the `files` whitelist; npm adds `package.json`, `README.md`, and `LICENSE`.
+`package.json` keeps **zero `dependencies` and zero root `devDependencies`**; there is intentionally no root `package-lock.json` or root `node_modules`. Install the isolated CI tools once with `npm ci --prefix .github/omp-tools`, then run `npm run check` (or `npm run check:portable` on Windows). The package ships `index.ts`, `config.ts`, and `llms.txt` via the `files` whitelist; npm adds `package.json`, `README.md`, and `LICENSE`.
+
+Key scripts:
+
+- `npm run check` / `npm run check:portable` / `npm run check:posix`
+- `npm run typecheck`, `npm run check:versions`, `npm run test:release-scripts`, `npm run test:graph`, `npm run test:unit`, `npm run test:posix`, `npm run test:packed`
+- `npm run release:bump <X.Y.Z>`
 
 Load and exercise changes manually:
 
@@ -75,7 +83,7 @@ Then in an omp session: run `/model-sync list|show|add ...` (and the `move` and 
 - **Naming**: camelCase functions/vars; PascalCase types; `cmd*` prefix for command sub-handlers; SCREAMING_CASE only for constants like `USAGE`; verb-first helper names (`extractAgentName`, `resolveActiveLayer`).
 - **Host-facing types**: do NOT import host runtime types beyond `ExtensionAPI`. Extend the locally declared duck-typed interfaces (`ModelsFacade`, `ModelRegistryFacade`, `UiFacade`, `ExtensionContextLike`, `SubagentSpawnEvent`, `ToolCallEventLike`, `RegistrySnapshot`, `LayerView`) and narrow `unknown` payloads with `typeof`/`in`/`Array.isArray` guards. Never use `any`.
 - **Error handling**: the spawn and `tool_call` paths catch and return `undefined`. The command handler catches errors and reports `err.message` through `notify`. `writeConfig` may throw on I/O failure or a structurally invalid document; the command handler surfaces it. No `console.*` or `process.exit`. `notify(ctx, message, level)` uses `info`, `warning`, or `error`.
-- **Types**: explicit return types everywhere; `unknown` + guards; no enums, generics, or decorators; standard TS only. The repo has no tsconfig, but the sources are checked with a temporary host stub under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes` during verification.
+- **Types**: explicit return types everywhere; `unknown` + guards; no enums, generics, or decorators; standard TS only. `scripts/typecheck.mjs` checks `config.ts` and `index.ts` via `scripts/tsconfig.typecheck.json` and `scripts/host-stub.d.ts` under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
 - **Async**: only the command handler is async; all config I/O is synchronous `node:fs`; no top-level await.
 - **Mutation safety**: `loadForWrite` deep-clones the entire document (`cloneConfig` → `cloneProfiles` + null-prototype `cloneSubagentMap`), so editing one preset can never mutate cached sibling presets; `cmdSet`/`cmdRemove` clone the subagents map before editing; `cmdPresetCopy` clones the source list (`cloneProfiles`); `toPresetConfig` clones legacy profiles; `cmdPresetRename` moves lists within the cloned document. Cache reads return shared nested maps, so clone before editing.
 - **Command semantics to preserve**: profile lookup by `main` is case-insensitive; `set <main> * <model>` updates the profile default while preserving per-agent entries (collapsing to a plain string only when no per-agent entry exists); removing entries until only `*` remains collapses back to the plain string; removing the last agent key deletes the whole profile; subcommands reject extra arguments with a usage hint; `pickSubagentSelector` semantics (exact key → `*` fallback) must stay consistent with command-side edits; `add`/`set`/`remove`/`move` mutate only the active preset and `loadActiveForWrite` refuses when none is active; preset names must be single tokens; `preset create` creates an empty inactive preset and never switches; `preset copy` deep-copies without switching and refuses an existing target name; `preset rename` preserves order and updates the active name; `preset use` is a no-op when the name is already active; `preset remove` refuses the active preset; the first successful create/copy/rename on a legacy document converts it; `move` refuses edge moves.
@@ -87,25 +95,30 @@ Then in an omp session: run `/model-sync list|show|add ...` (and the `move` and 
 |---|---|
 | `index.ts` | Extension entry: `modelSync(pi)` registration, `handleBeforeSubagentSpawn`, `handleToolCall`, command dispatch, completion, `cmdList`/`cmdShow`/`cmdAdd`/`cmdSet`/`cmdRemove`/`cmdMove`, `cmdPreset*`, `loadForWrite`/`loadActiveForWrite`, `saveConfig` |
 | `config.ts` | Config layer: path resolution, layer precedence, `LayerRead`, mtime+ctime+size+inode cache, atomic `writeConfig`, union `ModelSyncConfig` parsing (`parseConfig`), warnings, active projection (`projectActiveProfiles`), preset helpers (`presetNames`, `getPresetProfiles`, `toPresetConfig`, `isValidPresetName`), deep clones (`cloneProfiles`, `cloneConfig`), `findProfile` matching, `pickSubagentSelector` |
-| `package.json` | Minimal manifest; `files` whitelist; `omp.extensions` / `pi.extensions: ["./index.ts"]` host load declarations |
+| `package.json` | Package manifest; `files` whitelist; `omp.extensions` / `pi.extensions: ["./index.ts"]`; zero runtime/root dev dependencies; CI/release `scripts` |
 | `README.md` | Sole user documentation (English): install, preset/legacy config schema, active-preset selection and fail-closed behavior, matching rules, command table. **Update it with any behavior change** |
 | `llms.txt` | Agent-facing doc index (llmstxt.org convention): what the project is, install commands per host, minimal preset config, command summary. Keep in sync with README when install/config/command changes |
-| `CONTRIBUTING.md` | Contributor guide: verification expectations, PR and style conventions |
+| `CHANGELOG.md` | Release history in `## X.Y.Z — YYYY-MM-DD` format; validated on release and used to generate GitHub release notes |
+| `CONTRIBUTING.md` | Contributor guide: local CI setup, PR rules, branch protection, release runbook, and style conventions |
+| `.github/workflows/` | PR/push CI (`ci.yml`, `pr-title.yml`) and tag-driven release pipeline (`release.yml`, `release-verify.yml`, `release-dry-run.yml`) |
+| `.github/omp-tools/` | Isolated CI tool dependencies (`@oh-my-pi/pi-coding-agent`, `typescript`, `@types/node`) with lockfile, excluded from package root |
+| `scripts/` | Verification (`typecheck.mjs`, `test-load-graph.ts`, `test-packed.mjs`) and release tooling (`check-release-versions.mjs`, `bump-release.mjs`, `verify-release-tarball.mjs`, plus `node:test` suites) |
+| `test/` | Behavioral test suites (`portable.test.ts` and `posix.test.ts`) run via `bun test` |
 | `~/.omp/agent/pi-model-sync.json` | Global config (runtime artifact, not in repo) |
 | `<cwd>/.omp/pi-model-sync.json` | Project config (runtime artifact, replaces global wholesale) |
 
 ## Runtime/Tooling Preferences
 
 - **Runtime: Bun**: the omp host runs on Bun and executes the TypeScript sources directly; no build step, by design.
-- **Zero dependencies**: `config.ts` uses Node builtins only; there is no lockfile and no `node_modules`. Adding a dependency is a design change, not a routine edit.
+- **Zero runtime/root dependencies**: `config.ts` and `index.ts` use Node builtins only; there is no root `package-lock.json` and no root `node_modules`. Isolated CI tools (`typescript`, `@types/node`, `@oh-my-pi/pi-coding-agent`) live only in `.github/omp-tools/`. Adding a runtime dependency is a design change, not a routine edit.
 - Code uses **Node-compatible APIs only** (no `Bun.file`, Bun shell, or `import.meta`); keep new code on `node:` builtins so it stays host-portable.
-- `@earendil-works/pi-coding-agent` is an ambient host-supplied module on both hosts (omp forks the same `ExtensionAPI` surface); a standalone `tsc --noEmit` cannot resolve it without a stub. That is expected, not an error to fix by adding deps.
+- `@earendil-works/pi-coding-agent` is an ambient host-supplied module on both hosts (omp forks the same `ExtensionAPI` surface); `scripts/host-stub.d.ts` provides its type-only contract for `npm run typecheck`.
 
 ## Testing & QA
 
-**No QA infrastructure exists**: no test files, no test framework or runner, no coverage tooling, no lint/format configs, no CI, no tsconfig, no git hooks beyond stock samples. Do not fabricate `test`/`lint` commands.
+Automated verification runs via `npm run check` (`npm run check:portable` + `npm run check:posix` on Ubuntu/macOS; `npm run check:portable` on Windows), covering strict typechecking, version consistency, release helper `node:test` suites, runtime load-graph/import checks, Bun behavioral suites (`test/portable.test.ts`, `test/posix.test.ts`), and packed-tarball installation + isolated-home `omp` loading (`scripts/test-packed.mjs`).
 
-Verification is manual and behavioral. The only scripted repo check is the import smoke check documented in `CONTRIBUTING.md`. A temporary external harness can pin old-vs-new behavior and measure the hot paths; do not commit it or add a test runner without a design decision.
+Manual TUI verification under a real host (`omp` and/or upstream `pi`, pointing `PI_MODEL_SYNC_CONFIG` at a throwaway file) should still cover interactive UX when changing user-facing behavior:
 
 1. Load the extension with `omp --extension <repo path>` (and/or upstream pi), pointing `PI_MODEL_SYNC_CONFIG` at a throwaway file, never a real user config.
 2. Exercise `/model-sync add|set|list|show|remove|move` on a legacy file (with and without `--project`), then `preset list|create|copy|rename|use|remove`; confirm the first create/copy converts the file to `presets.default` with `activePreset: "default"`, that create/copy/rename leave the active profiles unchanged, that removing the active preset is refused, and that copying onto an existing name is refused.

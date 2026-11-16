@@ -224,7 +224,7 @@ No self-update machinery. The hosts' package managers own updates:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Review expectations and conventions live in [AGENTS.md](AGENTS.md).
+See [CONTRIBUTING.md](https://github.com/SenCha930511/pi-model-sync/blob/main/CONTRIBUTING.md). Review expectations and conventions live in [AGENTS.md](https://github.com/SenCha930511/pi-model-sync/blob/main/AGENTS.md).
 
 ## License
 

@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: release-verify
+    uses: ./.github/workflows/release-verify.yml
+    with:
+      tag: ${{ github.ref_name }}
+    permissions:
+      contents: read
+
+  publish:
+    name: publish
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+      queue: max
+    environment:
+      name: npm-publish
+      url: https://www.npmjs.com/package/@sencha930511/pi-model-sync
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.19.0
+
+      - name: Set up npm
+        uses: ./.github/actions/setup-npm
+
+      - name: Download the release tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: dist
+
+      - name: Verify the downloaded tarball
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF" = "refs/tags/$TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          node scripts/verify-release-tarball.mjs --directory dist --tag "$TAG" --head "$(git rev-parse HEAD)" --github-env "$GITHUB_ENV"
+
+      - name: Publish or verify the exact tarball
+        run: |
+          set -euo pipefail
+          LOCAL_INTEGRITY=$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`)' "$TARBALL")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            PUBLISHED_INTEGRITY=$(npm view "$NAME@$VERSION" dist.integrity)
+            test "$PUBLISHED_INTEGRITY" = "$LOCAL_INTEGRITY"
+            echo "$NAME@$VERSION is already published with the same integrity; skipping publish."
+            exit 0
+          fi
+          LATEST=$(npm view "$NAME" dist-tags.latest 2>/dev/null || true)
+          if [ -z "$LATEST" ]; then
+            echo "Could not determine $NAME latest dist-tag; refusing to publish." >&2
+            exit 1
+          fi
+          DIST_TAG=latest
+          if [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            DIST_TAG=backfill
+            echo "$NAME@$VERSION is older than the current latest $LATEST; publishing under the backfill dist-tag."
+          fi
+          PUBLISH_TARGET="$TARBALL"
+          case "$PUBLISH_TARGET" in
+            /*|./*|../*) ;;
+            *) PUBLISH_TARGET="./$PUBLISH_TARGET" ;;
+          esac
+          npm publish "$PUBLISH_TARGET" --access public --provenance --tag "$DIST_TAG"
+
+  github-release:
+    name: github-release
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.19.0
+
+      - name: Set up npm
+        uses: ./.github/actions/setup-npm
+
+      - name: Download the release tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: dist
+
+      - name: Verify the downloaded tarball and extract release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF" = "refs/tags/$TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")"
+          node scripts/verify-release-tarball.mjs --directory dist --tag "$TAG" --head "$(git rev-parse HEAD)" --github-env "$GITHUB_ENV"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          node scripts/check-release-versions.mjs --release --tag "$TAG" --notes-output "$NOTES_FILE"
+          test -s "$NOTES_FILE"
+          echo "NOTES_FILE=$NOTES_FILE" >> "$GITHUB_ENV"
+
+      - name: Verify published registry integrity
+        env:
+          HOME: ${{ runner.temp }}/omp-home
+          USERPROFILE: ${{ runner.temp }}/omp-home
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+          LOCAL_INTEGRITY=$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`)' "$TARBALL")
+          PUBLISHED_INTEGRITY=""
+          for _ in $(seq 1 60); do
+            PUBLISHED_INTEGRITY=$(npm view "$NAME@$VERSION" dist.integrity 2>/dev/null || true)
+            if [ "$PUBLISHED_INTEGRITY" = "$LOCAL_INTEGRITY" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test "$PUBLISHED_INTEGRITY" = "$LOCAL_INTEGRITY"
+
+      - name: Create or reuse the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          LATEST=$(npm view "$NAME" dist-tags.latest)
+          RELEASE_ARGS=(--title "$TAG" --notes-file "$NOTES_FILE")
+          if [ "$LATEST" = "$VERSION" ]; then
+            RELEASE_ARGS+=(--latest=true)
+          else
+            RELEASE_ARGS+=(--latest=false)
+            echo "$NAME@$VERSION is not the latest npm version; the GitHub release will not replace Latest."
+          fi
+          LOOKUP=$(gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>/dev/null || true)
+          STATUS=$(printf '%s\n' "$LOOKUP" | sed -n '1s/^HTTP\/[^ ]* \([0-9]*\).*/\1/p')
+          case "$STATUS" in
+            200)
+              gh release upload "$TAG" "$TARBALL" --clobber --repo "$GITHUB_REPOSITORY"
+              gh release edit "$TAG" "${RELEASE_ARGS[@]}" --draft=false --prerelease=false --repo "$GITHUB_REPOSITORY"
+              echo "Reused the existing GitHub release $TAG with the exact release tarball and changelog notes."
+              ;;
+            404)
+              gh release create "$TAG" "$TARBALL" --verify-tag "${RELEASE_ARGS[@]}" --repo "$GITHUB_REPOSITORY"
+              ;;
+            *)
+              echo "GitHub release lookup failed with HTTP status ${STATUS:-unknown}." >&2
+              exit 1
+              ;;
+          esac

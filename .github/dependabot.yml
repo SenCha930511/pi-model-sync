@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: /.github/omp-tools
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+    groups:
+      omp-tools:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
