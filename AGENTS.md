@@ -56,6 +56,8 @@ Flat two-module design; the only inter-file dependency is `index.ts → ./config
 - `scripts/`: zero-dependency Node/Bun verification and release helpers (`typecheck.mjs`, `host-stub.d.ts`, `tsconfig.typecheck.json`, `test-load-graph.ts`, `test-packed.mjs`, `check-release-versions.mjs`, `bump-release.mjs`, `verify-release-tarball.mjs`, and `test-*.mjs` unit tests).
 - `test/`: automated Bun behavioral tests (`portable.test.ts`, `posix.test.ts`).
 
+`.github/CODEOWNERS` names the maintainer. Code-owner review stays off while the repository has one maintainer. The `Protect release tags` ruleset restricts `v*` tag creation to the maintainer bypass actor. For npm, require 2FA, disallow traditional publish tokens, and revoke unused automation tokens.
+
 ## Development Commands
 
 `package.json` keeps **zero `dependencies` and zero root `devDependencies`**; there is intentionally no root `package-lock.json` or root `node_modules`. Install the isolated CI tools once with `npm ci --prefix .github/omp-tools`, then run `npm run check` (or `npm run check:portable` on Windows). The package ships `index.ts`, `config.ts`, and `llms.txt` via the `files` whitelist; npm adds `package.json`, `README.md`, and `LICENSE`.
