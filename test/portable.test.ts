@@ -72,7 +72,9 @@ afterEach(() => {
   }
 });
 
-function createHostHarness(options: { failLabel?: boolean; failSpawnHook?: boolean } = {}) {
+function createHostHarness(
+  options: { failLabel?: boolean; failSpawnHook?: boolean; tools?: unknown[]; failTools?: boolean } = {},
+) {
   const hooks = new Map<string, (...args: unknown[]) => unknown>();
   let command: MockCommand | undefined;
   let label: string | undefined;
@@ -91,6 +93,14 @@ function createHostHarness(options: { failLabel?: boolean; failSpawnHook?: boole
     registerCommand(name: string, def: MockCommand): void {
       if (name === "model-sync") command = def;
     },
+    ...(options.tools || options.failTools
+      ? {
+          getAllTools(): unknown[] {
+            if (options.failTools) throw new Error("incompatible getAllTools");
+            return options.tools ?? [];
+          },
+        }
+      : {}),
   };
 
   modelSync(api as never);
@@ -468,6 +478,124 @@ describe("extension hooks (omp & upstream pi)", () => {
       ["missing", "nope-unique-2"],
       ["anthropic", "claude-sonnet-4"],
     ]);
+  });
+
+  test("tool_call routes plugins detected from their registered schema", () => {
+    const dir = makeTempDir();
+    const cfg = path.join(dir, "sync.json");
+    process.env.PI_MODEL_SYNC_CONFIG = cfg;
+    writeConfig(cfg, {
+      profiles: [
+        {
+          main: "openai/gpt-6",
+          subagents: {
+            Explore: "anthropic/claude-haiku-4:high",
+            scout: "openai/gpt-6-mini",
+            "*": "openai/gpt-6-luna",
+          },
+        },
+      ],
+    });
+
+    const schema = (props: string[]) => ({
+      type: "object",
+      properties: Object.fromEntries(props.map((prop) => [prop, { type: "string" }])),
+    });
+    const tools = [
+      { name: "Agent", parameters: schema(["prompt", "subagent_type", "model", "thinking"]) },
+      { name: "subagent", parameters: schema(["agent", "task", "workflow", "action", "options", "model"]) },
+    ];
+    const host = createHostHarness({ tools });
+    const ctx = {
+      cwd: dir,
+      mode: "tui",
+      models: { current: () => ({ provider: "openai", id: "gpt-6" }), resolve: () => true },
+    };
+
+    const agentInput: Record<string, unknown> = { subagent_type: "Explore", prompt: "x" };
+    const routed = host.emitToolCall({ toolName: "Agent", input: agentInput }, ctx) as {
+      input: Record<string, unknown>;
+    };
+    expect(routed.input).toBe(agentInput);
+    expect(agentInput).toEqual({
+      subagent_type: "Explore",
+      prompt: "x",
+      model: "anthropic/claude-haiku-4",
+      thinking: "high",
+    });
+
+    const explicit: Record<string, unknown> = { subagent_type: "Explore", prompt: "x", model: "explicit/model" };
+    expect(host.emitToolCall({ toolName: "Agent", input: explicit }, ctx)).toBeUndefined();
+    expect(explicit.model).toBe("explicit/model");
+
+    const resumed: Record<string, unknown> = { subagent_type: "Explore", prompt: "x", resume: "abc" };
+    expect(host.emitToolCall({ toolName: "Agent", input: resumed }, ctx)).toBeUndefined();
+
+    const single: Record<string, unknown> = { agent: "scout", task: "x" };
+    host.emitToolCall({ toolName: "subagent", input: single }, ctx);
+    expect(single.model).toBe("openai/gpt-6-mini");
+
+    const workflow: Record<string, unknown> = { workflow: true };
+    host.emitToolCall({ toolName: "subagent", input: workflow }, ctx);
+    expect(workflow.model).toBe("openai/gpt-6-luna");
+
+    const fallbackHost = createHostHarness({ tools, failTools: true });
+    const fallbackCalls: Array<Record<string, unknown>> = [{ agent: "scout" }];
+    fallbackHost.emitToolCall({ toolName: "subagent", input: { calls: fallbackCalls } }, ctx);
+    expect(fallbackCalls[0]?.model).toBe("openai/gpt-6-mini");
+  });
+
+  test("nicobailon skips a bare id that two providers expose", () => {
+    const dir = makeTempDir();
+    const cfg = path.join(dir, "sync.json");
+    process.env.PI_MODEL_SYNC_CONFIG = cfg;
+    writeConfig(cfg, {
+      profiles: [{ main: "*", subagents: { scout: "gpt-x" } }],
+    });
+
+    const tool = {
+      name: "subagent",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(
+          ["agent", "task", "workflow", "action", "options"].map((prop) => [prop, { type: "string" }]),
+        ),
+      },
+    };
+    const host = createHostHarness({ tools: [tool] });
+    const warnings: string[] = [];
+    const ctx = {
+      cwd: dir,
+      mode: "tui",
+      model: { provider: "google", id: "gpt-6" },
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-x" },
+          { provider: "anthropic", id: "gpt-x" },
+        ],
+      },
+      ui: { notify: (message: string) => warnings.push(message) },
+    };
+
+    const ambiguous: Record<string, unknown> = { agent: "scout" };
+    expect(host.emitToolCall({ toolName: "subagent", input: ambiguous }, ctx)).toBeUndefined();
+    expect("model" in ambiguous).toBe(false);
+    expect(warnings.some((message) => message.includes("matches more than one provider"))).toBe(true);
+
+    const preferred: Record<string, unknown> = { agent: "scout" };
+    host.emitToolCall(
+      { toolName: "subagent", input: preferred },
+      { ...ctx, model: { provider: "openai", id: "gpt-6" } },
+    );
+    expect(preferred.model).toBe("gpt-x");
+
+    const uniqueCtx = {
+      ...ctx,
+      modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt-x" }] },
+    };
+    const unique: Record<string, unknown> = { agent: "scout" };
+    host.emitToolCall({ toolName: "subagent", input: unique }, uniqueCtx);
+    expect(unique.model).toBe("gpt-x");
   });
 });
 
