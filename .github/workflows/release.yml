@@ -179,7 +179,18 @@ jobs:
           STATUS=$(printf '%s\n' "$LOOKUP" | sed -n '1s/^HTTP\/[^ ]* \([0-9]*\).*/\1/p')
           case "$STATUS" in
             200)
-              gh release upload "$TAG" "$TARBALL" --clobber --repo "$GITHUB_REPOSITORY"
+              ASSET_NAME=$(basename "$TARBALL")
+              TMP_ASSET_NAME="${ASSET_NAME}.upload"
+              TMP_TARBALL="$RUNNER_TEMP/$TMP_ASSET_NAME"
+              cp "$TARBALL" "$TMP_TARBALL"
+              gh release upload "$TAG" "$TMP_TARBALL" --clobber --repo "$GITHUB_REPOSITORY"
+              OLD_ASSET_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$ASSET_NAME\") | .id" | head -1)
+              if [ -n "$OLD_ASSET_ID" ]; then
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$OLD_ASSET_ID"
+              fi
+              NEW_ASSET_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$TMP_ASSET_NAME\") | .id" | head -1)
+              test -n "$NEW_ASSET_ID"
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$NEW_ASSET_ID" -f name="$ASSET_NAME"
               gh release edit "$TAG" "${RELEASE_ARGS[@]}" --draft=false --prerelease=false --repo "$GITHUB_REPOSITORY"
               echo "Reused the existing GitHub release $TAG with the exact release tarball and changelog notes."
               ;;

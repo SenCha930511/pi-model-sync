@@ -51,6 +51,10 @@ The `main` ruleset is designed around four required checks: `verify`, `portabili
 
 The `pr-title` workflow uses `pull_request_target`. Public repositories must allow that event in a repository Actions policy before 2026-12-02, or the required `pr-title` check will be blocked.
 
+`.github/CODEOWNERS` names the maintainer. `require_code_owner_review` stays off while the repository has one maintainer, because GitHub does not count a self-approval. Enable it when a second maintainer or team is added.
+
+The `Protect release tags` ruleset includes a `creation` rule. Only the maintainer bypass actor can create `v*` tags; other writers cannot.
+
 ## Release runbook
 
 PR validation and releases are separate. Never create a tag or publish a package to test CI.
@@ -78,6 +82,8 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`:
 5. After a release ships, update `SenCha930511/omp-marketplace` if the marketplace entry should move to the new tag.
 
 Before the first release, enable `Allow npm publish` on the npm Trusted Publisher. The workflow uses direct `npm publish`, not staged publishing. A new trusted publisher must complete its first successful publish within two days or it expires.
+
+For stronger npm hardening, require 2FA for publishing, disallow traditional publish tokens, and revoke unused automation tokens. The trusted publisher is then the only automated publish path.
 
 ## License
 
