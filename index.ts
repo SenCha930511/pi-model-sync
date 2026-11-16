@@ -7,9 +7,11 @@
  *    included), where ctx.models.current() is that session's model; on a resolvable
  *    profile hit, the child's model is rewritten (original patterns stay as the retry
  *    fallback chain). Upstream pi lacks this event; a failed registration is skipped.
- * 2. tool_call: intercepts @mjakl/pi-subagent's `subagent` tool — when a call carries
- *    no model, a per-call model is injected from the same profile table; an explicit
+ * 2. tool_call: intercepts the tools of supported subagent plugins. The registered tool
+ *    schema and the call shape pick an adapter (decision 15); when a call carries no
+ *    model, a per-call model is injected from the same profile table. An explicit
  *    per-call model always wins and is never overwritten (decision 11).
+ *
  * Everything else passes through untouched. Startup is fully silent (decision 6).
  *
  * Decisions referenced by number in comments:
@@ -23,13 +25,25 @@
  * 8. An existing project file wholly replaces the global file.
  * 9. Command output and errors are English.
  * 10. The spawn path never throws.
- * 11. An explicit per-call pi-subagent model is never overwritten.
+ * 11. An explicit per-call plugin model is never overwritten.
  * 12. Dual-host support: omp via ctx.models, upstream pi via ctx.model/modelRegistry.
  * 13. Upstream selector tiers: @alias, :level, glob, provider/id, bare id.
+ * 14. Resume and management calls are never given a model.
+ * 15. Subagent plugins are detected from their registered tool schema, with the call
+ *     shape as the fallback when the host cannot list tools.
+ * 16. pi-model-sync never writes another plugin's settings file.
  */
 // Type-only and erased at runtime; the upstream package name keeps npm/pi-gallery tooling happy,
 // while omp supplies the same ambient ExtensionAPI surface under either name.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  ADAPTER_TOOL_NAMES,
+  applyModelSpec,
+  normalizeSelector,
+  selectAdapter,
+  THINKING_LEVELS,
+} from "./adapters";
+import type { SubagentAdapter, ToolInfoLike } from "./adapters";
 import {
   cloneConfig,
   cloneProfiles,
@@ -116,17 +130,6 @@ interface RegistrySnapshot {
 }
 
 // ── model adapters ───────────────────────────────────────────────
-
-/** Upstream pi's ThinkingLevel set (used to strip a selector `:level` suffix before validation). */
-const PI_THINKING_LEVELS: Record<string, true> = {
-  off: true,
-  minimal: true,
-  low: true,
-  medium: true,
-  high: true,
-  xhigh: true,
-  max: true,
-};
 
 function modelId(model: unknown): string | undefined {
   if (!model || typeof model !== "object") return undefined;
@@ -216,7 +219,7 @@ function piSelectorResolvable(
   if (selector.startsWith("@")) return false;
   let base = selector;
   const colon = base.lastIndexOf(":");
-  if (colon > 0 && Object.hasOwn(PI_THINKING_LEVELS, base.slice(colon + 1))) {
+  if (colon > 0 && THINKING_LEVELS.has(base.slice(colon + 1))) {
     base = base.slice(0, colon);
   }
   if (!base) return false;
@@ -309,21 +312,6 @@ function warnUnresolvableOnce(ctx: ExtensionContextLike, selector: string, tail:
   notify(ctx, `pi-model-sync: selector "${selector}" could not be resolved to an available model; ${tail}`, "warning");
 }
 
-/**
- * Decision 11 eligibility probe: the trimmed agent name when `call` is a plain object
- * without an explicit non-blank string model and with a non-blank string agent name;
- * undefined otherwise (arrays and primitives are never call records). Shared by the
- * leading scan and the injection loop, which starts at the first eligible call.
- */
-function eligibleCallAgent(call: unknown): string | undefined {
-  if (!call || typeof call !== "object" || Array.isArray(call)) return undefined;
-  const record = call as Record<string, unknown>;
-  if (typeof record.model === "string" && record.model.trim()) return undefined;
-  if (typeof record.agent !== "string") return undefined;
-  const agentName = record.agent.trim();
-  return agentName || undefined;
-}
-
 function handleBeforeSubagentSpawn(
   event: SubagentSpawnEvent,
   ctx: ExtensionContextLike,
@@ -360,21 +348,68 @@ function handleBeforeSubagentSpawn(
   }
 }
 
+/**
+ * Decision 15: read the registered tool schemas for adapter detection. A host without
+ * getAllTools(), or one that throws, falls back to call-shape detection.
+ */
+function readToolInfos(pi: ExtensionAPI | undefined): readonly ToolInfoLike[] | undefined {
+  if (!pi || typeof pi.getAllTools !== "function") return undefined;
+  try {
+    const raw = pi.getAllTools();
+    if (!Array.isArray(raw)) return undefined;
+    const infos: ToolInfoLike[] = [];
+    for (const entry of raw) {
+      if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) infos.push(entry);
+    }
+    return infos;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Adapter conflicts are a setup problem, not a per-call one: warn once per tool + set. */
+const warnedAdapterConflicts = new Set<string>();
+
+function warnAdapterConflictOnce(
+  ctx: ExtensionContextLike,
+  toolName: string,
+  adapters: readonly SubagentAdapter[],
+): void {
+  if (ctx.mode !== "tui") return;
+  const ids = adapters.map((adapter) => adapter.id);
+  const key = `${toolName}:${[...ids].sort().join(",")}`;
+  if (warnedAdapterConflicts.has(key)) return;
+  if (warnedAdapterConflicts.size >= 64) warnedAdapterConflicts.clear();
+  warnedAdapterConflicts.add(key);
+  notify(
+    ctx,
+    `pi-model-sync: tool "${toolName}" matches multiple subagent adapters (${ids.join(
+      ", ",
+    )}); skipping model injection`,
+    "warning",
+  );
+}
+
 function handleToolCall(
   event: ToolCallEventLike,
   ctx: ExtensionContextLike,
+  pi?: ExtensionAPI,
 ): ToolCallRoutingResult | undefined {
   try {
-    if (event.toolName !== "subagent") return undefined;
+    if (typeof event.toolName !== "string" || !ADAPTER_TOOL_NAMES.has(event.toolName)) {
+      return undefined;
+    }
     const input = event.input;
     if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
     const inputRecord = input as Record<string, unknown>;
-    const calls = inputRecord.calls;
-    if (!Array.isArray(calls) || calls.length === 0) return undefined;
-    // Hot-path short-circuit (decision 11): no eligible call means no model lookup or
-    // config read. Injection starts at the first hit so ineligible prefixes are checked once.
-    const firstEligible = calls.findIndex((call) => eligibleCallAgent(call) !== undefined);
-    if (firstEligible < 0) return undefined;
+    // Decision 15: schema first, call shape second. An explicit model, a resume, or a
+    // management call collects no slot, so the config read never happens for it.
+    const selection = selectAdapter(event.toolName, inputRecord, readToolInfos(pi));
+    if (selection.kind === "ambiguous") {
+      warnAdapterConflictOnce(ctx, event.toolName, selection.adapters);
+      return undefined;
+    }
+    if (selection.kind === "none") return undefined;
     const modelRef = currentModelRef(ctx);
     if (!modelRef) return undefined;
     const profile = findProfile(readConfig(ctx.cwd), modelRef);
@@ -384,26 +419,27 @@ function handleToolCall(
     // "*" default; validate each unique selector once (registry scans are not free upstream).
     const resolutionCache = new Map<string, boolean | undefined>();
     let registrySnapshot: RegistrySnapshot | undefined;
-    for (let index = firstEligible; index < calls.length; index += 1) {
-      const call = calls[index];
-      // Decision 11: an explicit per-call model always wins and is never overwritten.
-      const agentName = eligibleCallAgent(call);
-      if (!agentName) continue;
-      const record = call as Record<string, unknown>;
-      const selector = pickSubagentSelector(profile, agentName);
+    for (const slot of selection.slots) {
+      const selector = pickSubagentSelector(profile, slot.agentName);
       if (!selector) continue;
-      if (!resolutionCache.has(selector)) {
-        registrySnapshot ??= createRegistrySnapshot();
-        resolutionCache.set(selector, selectorResolvable(ctx, selector, registrySnapshot));
+      const spec = normalizeSelector(selector, selection.adapter.dialect);
+      if (!spec) {
+        warnUnresolvableOnce(
+          ctx,
+          selector,
+          `cannot route ${selection.adapter.label}; using its default model`,
+        );
+        continue;
       }
-      const ok = resolutionCache.get(selector);
-      if (ok === false) {
-        // Same as decision 4: unresolvable → no injection; pi-subagent's default
-        // (frontmatter → parent model) applies; warned once in the TUI.
+      if (!resolutionCache.has(spec.base)) {
+        registrySnapshot ??= createRegistrySnapshot();
+        resolutionCache.set(spec.base, selectorResolvable(ctx, spec.base, registrySnapshot));
+      }
+      if (resolutionCache.get(spec.base) === false) {
         warnUnresolvableOnce(ctx, selector, "using the default model for this subagent delegation");
         continue;
       }
-      record.model = selector;
+      applyModelSpec(slot, spec, selection.adapter.dialect);
       changed = true;
     }
     return changed ? { input: inputRecord } : undefined;
@@ -1467,7 +1503,9 @@ export default function modelSync(pi: ExtensionAPI): void {
     pi.on("before_subagent_spawn", handleBeforeSubagentSpawn);
   } catch {}
 
-  pi.on("tool_call", handleToolCall);
+  pi.on("tool_call", (event: ToolCallEventLike, ctx: ExtensionContextLike) =>
+    handleToolCall(event, ctx, pi),
+  );
   pi.registerCommand("model-sync", {
     description: "Manage main-model → subagent model mappings",
     getArgumentCompletions: modelSyncArgumentCompletions,

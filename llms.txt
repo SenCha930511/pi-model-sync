@@ -1,6 +1,6 @@
 # pi-model-sync
 
-> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model. It covers omp-native subagents and pi-subagent's `subagent` tool. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model. It covers omp-native subagents and the tools of supported third-party plugins (`@mjakl/pi-subagent`, `pi-subagents`, `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents`, `edxeth/pi-subagents`), detected from their registered tool schema. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
 
 ## Install (pick the user's host)
 
@@ -37,7 +37,7 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 
 ## Docs
 
-- [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, pi-subagent routing rules, `/model-sync` commands, updating
+- [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, subagent plugin routing and support matrix, `/model-sync` commands, updating
 - [Changelog](https://github.com/SenCha930511/pi-model-sync/blob/main/CHANGELOG.md)
 - [CONTRIBUTING](https://github.com/SenCha930511/pi-model-sync/blob/main/CONTRIBUTING.md)
 - [License](LICENSE): MIT

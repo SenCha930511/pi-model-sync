@@ -5,10 +5,10 @@
 [![GitHub stars](https://img.shields.io/github/stars/SenCha930511/pi-model-sync)](https://github.com/SenCha930511/pi-model-sync)
 [![License: MIT](https://img.shields.io/github/license/SenCha930511/pi-model-sync)](LICENSE)
 
-An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Two delegation paths are supported:
+An extension for **omp (oh my pi) and upstream pi**: rewrites the model used by subsequent subagents based on the *spawning session's current model*. Supported delegation paths:
 
 - omp native subagents (task / eval `agent()` / workpool workers).
-- The `subagent` tool of [pi-subagent](https://github.com/mjakl/pi-subagent) (`@mjakl/pi-subagent`), under both omp and upstream pi (pi-subagent itself requires Pi ≥ 0.87.1 or a compatible host).
+- Third-party subagent plugins with a per-call `model` field: `@mjakl/pi-subagent`, `pi-subagents` (nicobailon), `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents` (HazAT), and `edxeth/pi-subagents`. The plugin is identified from its registered tool schema, with the call shape as the fallback.
 
 After the main model changes, **newly spawned/delegated** subagents switch to the model mapped by the matching profile; running subagents never switch mid-flight. Nested spawns (a subagent spawning further subagents) are intercepted too: the lookup key is the spawning session's current model.
 
@@ -160,20 +160,31 @@ Routing on the spawn path is silent when it fails closed; `/model-sync list` and
 - `main` with `*` → explicit glob wildcard (`*` crosses `/`), tested against both the `provider/id` and bare `id` forms.
 - No implicit substring matching; the **first** match in file order wins.
 
-## pi-subagent routing rules
+## Subagent plugin routing
 
-The extension intercepts pi-subagent's `subagent` tool input `{calls: [{agent, prompt, model?, ...}]}` at `tool_call` time: when a call has no `model`, the spawning session's current model is matched against profile `main`, the call's `agent` name picks a selector (exact key first, then `"*"`. Key matching is **case-sensitive**. Align pi-subagent agent names with profile keys manually), and `call.model` is injected. When neither the exact key nor `"*"` exists, the call is not intercepted and pi-subagent's default routing applies. All other fields (`prompt`, `thinking`, `cwd`, `session`, ...) are preserved.
+At `tool_call` time the extension identifies the plugin behind the call and injects a model only when that call has none. Identification uses the tool's registered JSON Schema (`pi.getAllTools()`) first. Each adapter requires a set of property names and rejects others, so same-named tools are separated. A host without `getAllTools()`, or a schema that no longer matches, falls back to a stricter call-shape check.
 
-- **An explicit per-call `model` always wins** and is never overwritten. pi-subagent's own precedence is `call model → agent frontmatter model → parent model`; injection sits at the call-model layer, so an agent frontmatter `model` is overridden by profile routing by design. The profile is the single source of "which model to use now".
-- Named-session continuations get injected too.
-- Shape guard: only a tool named `subagent` whose input carries a `calls` array is intercepted; other same-named tools with a different shape (e.g. nicobailon/pi-subagents) are not affected.
-- Under omp, selectors are fully validated via `ctx.models.resolve()`; under upstream pi they are tier-checked:
-  - `@alias` (an omp-only concept, unresolvable upstream) → unresolvable, no injection;
-  - a `:level` suffix (`off/minimal/low/medium/high/xhigh/max`) → stripped before validating the base;
-  - a glob containing `*` → passed through for the child process to resolve (a failure surfaces as an explicit error on that delegation);
-  - `provider/id` (split at the first `/`) → looked up via `modelRegistry.find`; a bare id → looked up in `modelRegistry.getAvailable()/getAll()`; no hit, no injection.
-- An unresolvable selector is not injected; pi-subagent's default routing (frontmatter → parent model) applies, with a one-time TUI warning (once per selector).
-- An injected selector must be resolvable by the **child process** itself: pi-subagent spawns an independent child (upstream pi or omp), whose model registration sources (e.g. `~/.pi/agent/models.json`) must know that selector.
+| Plugin | Tool | Agent key | Selector handling |
+|---|---|---|---|
+| `@mjakl/pi-subagent` | `subagent` (`calls[]`) | `call.agent` | Passed through verbatim: `@alias`, glob, `:level`, bare id |
+| `pi-subagents` (nicobailon) | `subagent` (`agent`, `tasks[]`, `chain[]`, `workflow`) | `agent` per slot; `*` for a workflow | `provider/id`, bare id, `:level` suffix; no `@alias` or glob |
+| `@tintinweb/pi-subagents` | `Agent` | `subagent_type` | `provider/id` or fuzzy name; `:level` split into `thinking`; no `@alias` or glob |
+| `@gotgenes/pi-subagents` | `subagent` | `subagent_type` | Same as `@tintinweb` |
+| `pi-interactive-subagents` (HazAT) | `subagent` | `agent`, else `*` | `provider/id`; `:level` stripped (the plugin appends its own thinking level) |
+| `edxeth/pi-subagents` | `subagent` (`children[]` batches) | `agent` per slot | Exact `provider/id`; bare id, `@alias`, and glob are skipped |
+
+Rules that apply to every adapter:
+
+- **An explicit per-call `model` always wins** and is never overwritten. This includes `options.model` on nicobailon, per-item models in `tasks[]`/`chain[]`, and child models in `children[]`.
+- **Resume and management calls are never given a model.** `action` (nicobailon), `resume` (`@tintinweb`, `@gotgenes`), `resumeSessionId` (HazAT), and workflow or management calls are left untouched.
+- **Workflow scripts are a default-only seam.** nicobailon's `subagent({ workflow: ... })` receives the profile `"*"` selector as the workflow child default; a child that names its own model keeps it. The script's internal agent names are not visible to `tool_call`.
+- **Agent keys are case-sensitive.** The extension tries the exact key first, then `"*"`. Match the plugin's names (`Explore`, `Plan`, `general-purpose`, ...) exactly.
+- An unresolvable selector, or one the adapter cannot express (`@alias`, glob, or a bare id where unsupported), is not injected. The plugin's default routing applies and a one-time TUI warning appears.
+- Under omp, selectors are validated with `ctx.models.resolve()`; under upstream pi they are checked against `modelRegistry` (`:level` stripped, glob passed through, `@alias` unresolvable).
+- **Frontmatter and model scope still win where the plugin says so.** `@tintinweb` prefers an agent's frontmatter `model` over the tool parameter; `@gotgenes` lets the call win unless the agent is `locked`; `edxeth` honors `allow-model-override: false` and `allowed-models`. These are plugin policies, not routing failures.
+- Calls that bypass `tool_call` (workflow scripts, agent mentions, `/subagent` commands, service APIs, cross-extension RPC) are not intercepted.
+
+pi-subagent (`@mjakl`) keeps its original behavior: `{calls: [{agent, prompt, model?, ...}]}`, `call.model` injection, and named-session continuations are injected too. An injected selector must be resolvable by the **child process** itself: pi-subagent spawns an independent child whose model sources (e.g. `~/.pi/agent/models.json`) must know that selector.
 
 ## /model-sync command
 

@@ -10,7 +10,7 @@ import { resolveCommandProbe } from "./command-probe.mjs";
 
 const execute = promisify(execFile);
 const PACKAGE_NAME = "@sencha930511/pi-model-sync";
-const EXPECTED_FILES = ["LICENSE", "README.md", "config.ts", "index.ts", "llms.txt", "package.json"];
+const EXPECTED_FILES = ["LICENSE", "README.md", "adapters.ts", "config.ts", "index.ts", "llms.txt", "package.json"];
 
 const runNpm = (args, options) => {
   const command = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -101,6 +101,7 @@ try {
   const installed = path.join(install, "node_modules", "@sencha930511", "pi-model-sync");
   await access(path.join(installed, "index.ts"));
   await access(path.join(installed, "config.ts"));
+  await access(path.join(installed, "adapters.ts"));
   await access(path.join(installed, "llms.txt"));
   const installedPkg = JSON.parse(await readFile(path.join(installed, "package.json"), "utf8"));
   assert.equal(installedPkg.dependencies, undefined, "package must not declare runtime dependencies");

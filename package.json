@@ -3,9 +3,9 @@
   "version": "0.5.0",
   "license": "MIT",
   "type": "module",
-  "description": "Route subagent models based on the spawning session model (omp & upstream pi, incl. pi-subagent)",
+  "description": "Route subagent models based on the spawning session model (omp & upstream pi, incl. third-party subagent plugins)",
   "keywords": ["pi-package", "pi-extension", "omp", "subagent", "model-routing"],
-  "files": ["index.ts", "config.ts", "llms.txt"],
+  "files": ["index.ts", "config.ts", "adapters.ts", "llms.txt"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SenCha930511/pi-model-sync.git"
@@ -26,7 +26,7 @@
     "check:versions": "node scripts/check-release-versions.mjs",
     "release:bump": "node scripts/bump-release.mjs",
     "test:graph": "bun scripts/test-load-graph.ts",
-    "test:unit": "bun test test/portable.test.ts",
+    "test:unit": "bun test test/portable.test.ts test/adapters.test.ts",
     "test:posix": "bun test test/posix.test.ts",
     "test:release-scripts": "node --test scripts/test-check-release-versions.mjs scripts/test-bump-release.mjs scripts/test-verify-release-tarball.mjs",
     "test:packed": "node scripts/test-packed.mjs",

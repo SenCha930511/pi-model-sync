@@ -1,6 +1,7 @@
 declare module "@earendil-works/pi-coding-agent" {
   export interface ExtensionAPI {
     setLabel?(label: string): void;
+    getAllTools?(): unknown;
     on(event: string, handler: (...args: never[]) => unknown): void;
     registerCommand(name: string, options: {
       description: string;

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Route subagent models for `pi-subagents` (nicobailon), `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents` (HazAT), and `edxeth/pi-subagents` alongside `@mjakl/pi-subagent`.
+- Detect the plugin from its registered tool schema (`pi.getAllTools()`), with a stricter call-shape fallback for hosts without it; never overwrite an explicit model and never inject into resume or management calls.
+- Split a `:level` selector into a `thinking` field for plugins that do not parse the suffix, and skip `@alias`, glob, or bare-id selectors that the target plugin cannot resolve.
+
 ## 0.5.0 — 2026-11-16
 
 - Treat a missing config file as a first-run state where `list` and `preset list` show onboarding hints instead of errors.
