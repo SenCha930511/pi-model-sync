@@ -167,7 +167,7 @@ At `tool_call` time the extension identifies the plugin behind the call and inje
 | Plugin | Tool | Agent key | Selector handling |
 |---|---|---|---|
 | `@mjakl/pi-subagent` | `subagent` (`calls[]`) | `call.agent` | Passed through verbatim: `@alias`, glob, `:level`, bare id |
-| `pi-subagents` (nicobailon) | `subagent` (`agent`, `tasks[]`, `chain[]`, `workflow`) | `agent` per slot; `*` for a workflow | `provider/id`, bare id, `:level` suffix; no `@alias` or glob |
+| `pi-subagents` (nicobailon) | `subagent` (`agent`, `tasks[]`, `chain[]`, `workflow`) | `agent` per slot; `*` for a workflow | `provider/id`, bare id when one provider exposes it, `:level` suffix; no `@alias` or glob |
 | `@tintinweb/pi-subagents` | `Agent` | `subagent_type` | `provider/id` or fuzzy name; `:level` split into `thinking`; no `@alias` or glob |
 | `@gotgenes/pi-subagents` | `subagent` | `subagent_type` | Same as `@tintinweb` |
 | `pi-interactive-subagents` (HazAT) | `subagent` | `agent`, else `*` | `provider/id`; `:level` stripped (the plugin appends its own thinking level) |
@@ -176,7 +176,7 @@ At `tool_call` time the extension identifies the plugin behind the call and inje
 Rules that apply to every adapter:
 
 - **An explicit per-call `model` always wins** and is never overwritten. This includes `options.model` on nicobailon, per-item models in `tasks[]`/`chain[]`, and child models in `children[]`.
-- **Resume and management calls are never given a model.** `action` (nicobailon), `resume` (`@tintinweb`, `@gotgenes`), `resumeSessionId` (HazAT), and workflow or management calls are left untouched.
+- **Resume and management calls are never given a model.** `action` (nicobailon), `resume` (`@tintinweb`, `@gotgenes`), and `resumeSessionId` (HazAT) are left untouched.
 - **Workflow scripts are a default-only seam.** nicobailon's `subagent({ workflow: ... })` receives the profile `"*"` selector as the workflow child default; a child that names its own model keeps it. The script's internal agent names are not visible to `tool_call`.
 - **Agent keys are case-sensitive.** The extension tries the exact key first, then `"*"`. Match the plugin's names (`Explore`, `Plan`, `general-purpose`, ...) exactly.
 - An unresolvable selector, or one the adapter cannot express (`@alias`, glob, or a bare id where unsupported), is not injected. The plugin's default routing applies and a one-time TUI warning appears.

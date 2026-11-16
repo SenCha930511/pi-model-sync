@@ -19,6 +19,8 @@ export interface SelectorDialect {
   allowAlias: boolean;
   allowGlob: boolean;
   allowBareId: boolean;
+  /** A bare id is only usable when exactly one provider exposes it (nicobailon). */
+  uniqueBareId?: boolean;
 }
 
 export interface ModelSpec {
@@ -128,7 +130,7 @@ function collectNicobailon(input: Record<string, unknown>): CallSlot[] {
   }
   const slots: CallSlot[] = [];
   const agentName = nonBlank(input.agent);
-  if (agentName && nonBlank(input.task)) slots.push({ record: input, agentName });
+  if (agentName) slots.push({ record: input, agentName });
   collectNicobailonTasks(input.tasks, slots);
   collectNicobailonChain(input.chain, slots);
   return slots;
@@ -151,7 +153,7 @@ function collectHazat(input: Record<string, unknown>): CallSlot[] {
 function collectEdxeth(input: Record<string, unknown>): CallSlot[] {
   if (nonBlank(input.model)) return [];
   const children = input.children;
-  if (Array.isArray(children)) {
+  if (Array.isArray(children) && children.length > 0) {
     const slots: CallSlot[] = [];
     for (const child of children) {
       if (!isRecord(child)) continue;
@@ -185,7 +187,13 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     requiredProps: ["agent", "task", "workflow", "action", "options"],
     forbiddenProps: ["calls", "subagent_type", "children", "resumeSessionId"],
     fallbackProps: ["options", "workflow", "tasks", "chain", "action"],
-    dialect: { thinking: "suffix", allowAlias: false, allowGlob: false, allowBareId: true },
+    dialect: {
+      thinking: "suffix",
+      allowAlias: false,
+      allowGlob: false,
+      allowBareId: true,
+      uniqueBareId: true,
+    },
     collect: collectNicobailon,
   },
   {

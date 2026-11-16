@@ -62,7 +62,7 @@ Three-module design: `adapters.ts` (pure detection and dialect translation), `co
 
 ## Development Commands
 
-`package.json` keeps **zero `dependencies` and zero root `devDependencies`**; there is intentionally no root `package-lock.json` or root `node_modules`. Install the isolated CI tools once with `npm ci --prefix .github/omp-tools`, then run `npm run check` (or `npm run check:portable` on Windows). The package ships `index.ts`, `config.ts`, and `llms.txt` via the `files` whitelist; npm adds `package.json`, `README.md`, and `LICENSE`.
+`package.json` keeps **zero `dependencies` and zero root `devDependencies`**; there is intentionally no root `package-lock.json` or root `node_modules`. Install the isolated CI tools once with `npm ci --prefix .github/omp-tools`, then run `npm run check` (or `npm run check:portable` on Windows). The package ships `index.ts`, `config.ts`, `adapters.ts`, and `llms.txt` via the `files` whitelist; npm adds `package.json`, `README.md`, and `LICENSE`.
 
 Key scripts:
 

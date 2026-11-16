@@ -177,6 +177,13 @@ describe("explicit model and resume guards", () => {
     expect(adapterIdFor("subagent", { action: "resume", agent: "scout" }, [nicobailonTool])).toBeUndefined();
   });
 
+  test("nicobailon accepts a direct call without a task", () => {
+    const selection = selectAdapter("subagent", { agent: "scout" }, [nicobailonTool]);
+    expect(selection.kind).toBe("match");
+    if (selection.kind !== "match") return;
+    expect(selection.slots.map((slot) => slot.agentName)).toEqual(["scout"]);
+  });
+
   test("nicobailon structured items keep their own model", () => {
     const input = {
       tasks: [
@@ -233,6 +240,15 @@ describe("explicit model and resume guards", () => {
     expect(selection.slots.map((slot) => slot.agentName)).toEqual(["scout"]);
 
     expect(adapterIdFor("subagent", { model: "p/m", children: [{ agent: "scout" }] }, [edxethTool])).toBeUndefined();
+  });
+
+  test("edxeth treats an empty children array as a single spawn", () => {
+    const input = { name: "n", task: "t", title: "T", children: [] };
+    const selection = selectAdapter("subagent", input, [edxethTool]);
+    expect(selection.kind).toBe("match");
+    if (selection.kind !== "match") return;
+    expect(selection.slots).toHaveLength(1);
+    expect(selection.slots[0]?.record).toBe(input);
   });
 
   test("mjakl keeps its existing per-call guard", () => {

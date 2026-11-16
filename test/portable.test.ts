@@ -544,6 +544,52 @@ describe("extension hooks (omp & upstream pi)", () => {
     fallbackHost.emitToolCall({ toolName: "subagent", input: { calls: fallbackCalls } }, ctx);
     expect(fallbackCalls[0]?.model).toBe("openai/gpt-6-mini");
   });
+
+  test("nicobailon skips a bare id that two providers expose", () => {
+    const dir = makeTempDir();
+    const cfg = path.join(dir, "sync.json");
+    process.env.PI_MODEL_SYNC_CONFIG = cfg;
+    writeConfig(cfg, {
+      profiles: [{ main: "openai/gpt-6", subagents: { scout: "gpt-x" } }],
+    });
+
+    const tool = {
+      name: "subagent",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(
+          ["agent", "task", "workflow", "action", "options"].map((prop) => [prop, { type: "string" }]),
+        ),
+      },
+    };
+    const host = createHostHarness({ tools: [tool] });
+    const warnings: string[] = [];
+    const ctx = {
+      cwd: dir,
+      mode: "tui",
+      model: { provider: "openai", id: "gpt-6" },
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-x" },
+          { provider: "anthropic", id: "gpt-x" },
+        ],
+      },
+      ui: { notify: (message: string) => warnings.push(message) },
+    };
+
+    const ambiguous: Record<string, unknown> = { agent: "scout" };
+    expect(host.emitToolCall({ toolName: "subagent", input: ambiguous }, ctx)).toBeUndefined();
+    expect("model" in ambiguous).toBe(false);
+    expect(warnings.some((message) => message.includes("matches more than one provider"))).toBe(true);
+
+    const uniqueCtx = {
+      ...ctx,
+      modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt-x" }] },
+    };
+    const unique: Record<string, unknown> = { agent: "scout" };
+    host.emitToolCall({ toolName: "subagent", input: unique }, uniqueCtx);
+    expect(unique.model).toBe("gpt-x");
+  });
 });
 
 describe("/model-sync commands and completions", () => {

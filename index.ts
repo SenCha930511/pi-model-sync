@@ -274,6 +274,33 @@ function selectorResolvable(
   return undefined;
 }
 
+/**
+ * nicobailon accepts a bare id only when exactly one provider exposes it. Upstream pi
+ * exposes the full registry, so count the providers. omp's resolve() picks one model
+ * and hides the rest, so trust it there. undefined → this host cannot tell.
+ */
+function bareSelectorUnique(
+  ctx: ExtensionContextLike,
+  selector: string,
+  snapshot: RegistrySnapshot,
+): boolean | undefined {
+  let base = selector;
+  const colon = base.lastIndexOf(":");
+  if (colon > 0 && THINKING_LEVELS.has(base.slice(colon + 1))) base = base.slice(0, colon);
+  if (!base || base.startsWith("@") || base.includes("*") || base.includes("/")) return undefined;
+  const registry = ctx.modelRegistry;
+  if (!registry) return undefined;
+  if (typeof registry.getAvailable !== "function" && typeof registry.getAll !== "function") {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const entry of registryEntries(registry, snapshot)) {
+    if (modelId(entry) === base) providers.add(modelProvider(entry));
+  }
+  if (providers.size === 0) return undefined;
+  return providers.size === 1;
+}
+
 // ── spawn and tool_call routing (decisions 1, 2, 4, 7, 10, 11) ──
 
 /** Selectors already warned about as unresolvable (once per selector). */
@@ -430,6 +457,17 @@ function handleToolCall(
           `cannot route ${selection.adapter.label}; using its default model`,
         );
         continue;
+      }
+      if (selection.adapter.dialect.uniqueBareId) {
+        registrySnapshot ??= createRegistrySnapshot();
+        if (bareSelectorUnique(ctx, spec.base, registrySnapshot) === false) {
+          warnUnresolvableOnce(
+            ctx,
+            selector,
+            "the bare model id matches more than one provider; use provider/id",
+          );
+          continue;
+        }
       }
       if (!resolutionCache.has(spec.base)) {
         registrySnapshot ??= createRegistrySnapshot();
