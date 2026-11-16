@@ -1,6 +1,6 @@
 # pi-model-sync
 
-> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model — omp-native subagents plus pi-subagent's `subagent` tool. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model. It covers omp-native subagents and pi-subagent's `subagent` tool. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
 
 ## Install (pick the user's host)
 
@@ -9,7 +9,7 @@
 - git, tag-pinned (either host): `omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.4.2` / `pi install git:github.com/SenCha930511/pi-model-sync@v0.4.2`
 - omp marketplace: `omp plugin marketplace add SenCha930511/omp-marketplace`, then `omp plugin install pi-model-sync@sencha930511`
 
-Verify after installing: start the host and run `/model-sync list` — it prints the active config layer, the active preset, and that preset's profiles.
+Verify after installing: start the host and run `/model-sync list`. It prints the active config layer, the active preset, and that preset's profiles. With no config file yet, it prints the first-run hint instead of an error.
 
 ## Minimal config
 
@@ -26,14 +26,14 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 }
 ```
 
-`activePreset` picks the preset whose profile list is in effect for that layer; a missing or dangling name routes nothing (fail closed, no fallback). Legacy `{ "profiles": [...] }` files still work as a virtual `default` preset, and the first successful `preset create`/`preset copy` converts them. `main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins. An agent key with no `*` default is not intercepted. An explicit per-call `model` in a pi-subagent call is never overwritten.
+`activePreset` picks the preset whose profile list is in effect for that layer; a missing, empty, or null name routes nothing (fail closed, no fallback), and `preset use` repairs the selection. A typo-only root, a non-array `profiles` value, or a malformed preset value is a structural error; invalid profile entries are skipped with a warning. Legacy `{ "profiles": [...] }` files still work as a virtual `default` preset, and the first successful `preset create`/`preset copy` converts them. `main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins, and `/model-sync move` changes that order. An agent key with no `*` default is not intercepted. An explicit per-call `model` in a pi-subagent call is never overwritten.
 
 ## Commands
 
-- `/model-sync [list]`, `/model-sync show`, `/model-sync add <main> <model>`, `/model-sync set <main> <agent> <model>`, `/model-sync remove <main> [agent]`
-- `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset use <name>`, `/model-sync preset remove <name>`
-- Writes target the global file; add `--project` to write the project file. `add`/`set`/`remove` edit only the active preset; `preset remove` refuses the active preset.
-- Typing the command shows argument completion for subcommands and existing preset names (`preset use`, `preset remove`, and the source of `preset copy`).
+- `/model-sync [list]`, `/model-sync show [model] [agent]`, `/model-sync add <main> <model>`, `/model-sync set <main> <agent> <model>`, `/model-sync remove <main> [agent]`, `/model-sync move <main> <top|bottom|up|down>`
+- `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset rename <old> <new>`, `/model-sync preset use <name>`, `/model-sync preset remove <name>`
+- Writes target the global file; add `--project` to write the project file. When the project file exists, a global write warns that the project layer overrides it. `add`/`set`/`remove`/`move` edit only the active preset; `preset remove` refuses the active preset.
+- Typing the command shows argument completion for subcommands, profile `main` values and agent keys (`add`, `set`, `remove`, `move`), and existing preset names (`preset use`, `preset remove`, and the source of `preset copy`/`preset rename`). A typed `--project` flag is preserved and not suggested twice.
 
 ## Docs
 

@@ -6,7 +6,7 @@ directly on Bun).
 
 ## Before you start
 
-- Read `AGENTS.md` — it documents the architecture, invariants, and conventions
+- Read `AGENTS.md`. It documents the architecture, invariants, and conventions
   that reviewers will hold you to (never-throwing interception paths, whole-file
   project-over-global replacement, zero dependencies, English comments, docs,
   and notify/UI strings).
@@ -15,7 +15,7 @@ directly on Bun).
 
 ## Development
 
-There is no package manager install, lint, or test command — deliberately.
+There is no package manager install, lint, or test command. That is deliberate.
 
 - Manual load during development:
   - omp: `omp --extension /path/to/pi-model-sync`
@@ -30,8 +30,15 @@ Behavioral verification is required for every functional change:
 1. `bun -e 'const m = await import("./index.ts"); if (typeof m.default !== "function") process.exit(1)'`
    must print nothing and exit 0.
 2. Exercise the changed path under a real host (omp and/or upstream pi), with a
-   stub extension or throwaway harness when deterministic proof is needed.
-3. Update `README.md` and `AGENTS.md` in the same change when behavior moves.
+   stub extension or throwaway harness when deterministic proof is needed. For
+   command changes, cover first-run onboarding, `--project`, completion, and the
+   fail-closed states.
+3. Update `README.md`, `llms.txt`, and `AGENTS.md` in the same change when
+   behavior moves.
+
+For routing or config changes, a temporary fake-host harness is useful for an
+old-vs-new comparison and for hot-path measurements. Keep it outside the repo.
+The project does not ship a test runner.
 
 ## Pull requests
 
