@@ -485,7 +485,7 @@ It covers:
 - Bun behavioral suites (`test/portable.test.ts`, `test/adapters.test.ts`, `test/commands.test.ts`, `test/features.test.ts`, `test/resolver.test.ts`, `test/posix.test.ts`);
 - packed-tarball installation, isolated-home `omp` loading, and upstream pi RPC execution of `/model-sync list` (`scripts/test-packed.mjs`).
 
-The adapter suite covers schema fingerprints, same-named tool separation, call-shape fallback, ambiguity handling, explicit-model and resume guards, selector dialects, and model injection. The portable suite covers config paths, parsing, projection, matching, the spawn and `tool_call` hooks, commands, and completions. The command, feature, and resolver suites cover command guards, session overrides, pause and resume, status, route log, doctor, init, interactive preset use, completion, and selector resolution. `npm run test:unit` enforces a per-file coverage ratchet of 89% lines and 95% functions.
+The adapter suite covers schema fingerprints, same-named tool separation, call-shape fallback, ambiguity handling, explicit-model and resume guards, selector dialects, and model injection. The portable suite covers config paths, parsing, projection, matching, the spawn and `tool_call` hooks, commands, and completions. The command, feature, and resolver suites cover command guards, session overrides, pause and resume, status, route log, doctor, init, interactive preset use, completion, and selector resolution. `npm run test:unit` enforces a per-file coverage ratchet of 88% lines and 95% functions; the POSIX-only symlink test runs in `test:posix`.
 
 Manual host verification is still useful for interactive UX. Load the extension with a throwaway config:
 

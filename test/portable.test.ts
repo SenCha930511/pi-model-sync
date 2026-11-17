@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -213,16 +213,6 @@ describe("parsing, projection, cloning, and atomic writes", () => {
     expect(isValidPresetName("")).toBe(false);
   });
 
-  test("writeConfig follows a symlink instead of replacing it", () => {
-    const dir = makeTempDir();
-    const real = path.join(dir, "real.json");
-    const link = path.join(dir, "link.json");
-    writeConfig(real, { profiles: [] });
-    symlinkSync(real, link);
-    writeConfig(link, { profiles: [{ main: "*", subagents: "openai/mini" }] });
-    expect(lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(projectActiveProfiles(readLayer(real).config).profiles).toHaveLength(1);
-  });
 
   test("warns on unknown keys and parses agentMatch", () => {
     const dir = makeTempDir();

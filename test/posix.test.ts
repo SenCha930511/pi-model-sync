@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { readConfig, readLayer, resolveActiveLayer, writeConfig } from "../config";
+import { projectActiveProfiles, readConfig, readLayer, resolveActiveLayer, writeConfig } from "../config";
 
 const tempRoots: string[] = [];
 const readonlyDirs: string[] = [];
@@ -58,5 +58,16 @@ describe("POSIX filesystem invariants", () => {
 
     expect(() => writeConfig(target, { profiles: [{ main: "a", subagents: "b" }] })).toThrow();
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("writeConfig follows a symlink instead of replacing it", () => {
+    const dir = makeTempDir("symlink-");
+    const real = path.join(dir, "real.json");
+    const link = path.join(dir, "link.json");
+    writeConfig(real, { profiles: [] });
+    symlinkSync(real, link);
+    writeConfig(link, { profiles: [{ main: "*", subagents: "openai/mini" }] });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(projectActiveProfiles(readLayer(real).config).profiles).toHaveLength(1);
   });
 });
