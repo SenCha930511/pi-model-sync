@@ -1,6 +1,6 @@
 {
   "name": "@sencha930511/pi-model-sync",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "MIT",
   "type": "module",
   "description": "Route subagent models based on the spawning session model (omp & upstream pi, incl. third-party subagent plugins)",
