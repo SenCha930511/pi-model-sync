@@ -138,8 +138,58 @@ describe("schema fingerprints", () => {
     expect(adapterIdFor("subagent", { agent: "scout", task: "x" }, [plain])).toBeUndefined();
   });
 
-  test("resolves local $ref and $defs properties", () => {
+  test("a nested or definition-only model field does not satisfy the fingerprint", () => {
+    const nested: ToolInfoLike = {
+      name: "Agent",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          subagent_type: { type: "string" },
+          metadata: {
+            type: "object",
+            properties: { model: { type: "string" }, thinking: { type: "string" } },
+          },
+        },
+      },
+    };
+    const props = schemaProps(nested);
+    expect(props.has("metadata.model")).toBe(true);
+    expect(props.has("model")).toBe(false);
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, props)).toBe(false);
+
+    const unreferenced: ToolInfoLike = {
+      name: "Agent",
+      parameters: {
+        type: "object",
+        properties: { prompt: { type: "string" }, subagent_type: { type: "string" } },
+        $defs: { call: { type: "object", properties: { model: {}, thinking: {} } } },
+      },
+    };
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, schemaProps(unreferenced))).toBe(
+      false,
+    );
+  });
+
+  test("resolves local $ref targets at the referencing position", () => {
     const referenced: ToolInfoLike = {
+      name: "Agent",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { $ref: "#/$defs/text" },
+          subagent_type: { $ref: "#/$defs/text" },
+          model: { $ref: "#/$defs/text" },
+          thinking: { $ref: "#/$defs/text" },
+        },
+        $defs: { text: { type: "string" } },
+      },
+    };
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, schemaProps(referenced))).toBe(
+      true,
+    );
+
+    const wrapped: ToolInfoLike = {
       name: "Agent",
       parameters: {
         type: "object",
@@ -152,11 +202,10 @@ describe("schema fingerprints", () => {
         },
       },
     };
-    const props = schemaProps(referenced);
-    expect(props.has("prompt")).toBe(true);
-    expect(props.has("subagent_type")).toBe(true);
-    expect(props.has("model")).toBe(true);
-    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, props)).toBe(true);
+    const wrappedProps = schemaProps(wrapped);
+    expect(wrappedProps.has("input.model")).toBe(true);
+    expect(wrappedProps.has("model")).toBe(false);
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, wrappedProps)).toBe(false);
   });
 });
 
