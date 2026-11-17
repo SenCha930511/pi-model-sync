@@ -254,20 +254,28 @@ export function readConfig(cwd: string, selection?: SessionSelection): Effective
 
 // ── writes ───────────────────────────────────────────────────────
 
-/** Follow symlinks so an atomic rename updates the real file instead of replacing a dotfile link. */
+/** Follow symlinks so an atomic rename updates the real file instead of replacing
+ * a dotfile link. A chain that cannot be resolved within 8 links (a loop or a
+ * deeper chain) is refused: POSIX rename does not dereference the final path
+ * component, so writing would replace the link itself. */
 function resolveWriteTarget(path: string): string {
   let current = path;
-  for (let depth = 0; depth < 8; depth += 1) {
-    let link: string;
+  for (let depth = 0; ; depth += 1) {
+    let isLink = false;
+    let link = "";
     try {
-      if (!lstatSync(current).isSymbolicLink()) return current;
-      link = readlinkSync(current);
-    } catch {
-      return current;
+      isLink = lstatSync(current).isSymbolicLink();
+      if (isLink) link = readlinkSync(current);
+    } catch (error) {
+      if (missingErrorCode(error)) return current;
+      throw error;
+    }
+    if (!isLink) return current;
+    if (depth >= 8) {
+      throw new Error(`cannot resolve symlink chain for ${path}`);
     }
     current = isAbsolute(link) ? link : resolve(dirname(current), link);
   }
-  return current;
 }
 
 /** Atomic write: mkdir → unique <path>.<pid>.<uuid>.tmp → rename; the tmp file is
