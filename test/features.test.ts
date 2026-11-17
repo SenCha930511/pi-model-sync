@@ -449,6 +449,38 @@ describe("completion", () => {
     expect(complete("move openai/gpt-6 extra ")).toBeNull();
   });
 
+  test("quotes dynamic values and returns null for malformed prefixes", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      activePreset: "default",
+      presets: {
+        default: [{ main: "openai/gpt-6", subagents: { "*": "openai/luna", "my agent": "openai/mini" } }],
+        "--help": [],
+      },
+    });
+    const ctx = modelCtx(cwd, {
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+        list: () => [{ provider: "openai", id: "gpt-6" }],
+      },
+    });
+    host.emitSessionStart(ctx);
+    const complete = host.command().getArgumentCompletions!;
+
+    expect(complete("preset use ")?.find((item) => item.label === "--help")?.value).toBe(
+      'preset use "--help"',
+    );
+    expect(complete("set openai/gpt-6 ")?.find((item) => item.label === "my agent")?.value).toBe(
+      'set openai/gpt-6 "my agent" ',
+    );
+    expect(complete("bogus --")).toBeNull();
+    expect(complete("add --bogus ")).toBeNull();
+    expect(complete('add "" ')).toBeNull();
+    expect(complete("set openai/gpt-6 --nope ")).toBeNull();
+  });
+
   test("returns null when the target has no config or the profile has a string default", () => {
     const empty = createHostHarness();
     empty.emitSessionStart({

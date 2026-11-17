@@ -66,6 +66,10 @@ interface CompletionContext {
   commandTokens: string[];
   projectFlagInTokens: boolean;
   useProject: boolean;
+  /** An unquoted option the command parser rejects; --project/--help/-h are allowed. */
+  unknownOption: boolean;
+  /** A completed blank argument (""), which every subcommand rejects. */
+  blankToken: boolean;
 }
 
 interface CompletionToken {
@@ -127,7 +131,24 @@ function parseCompletionContext(argumentPrefix: string): CompletionContext | nul
     .filter((token) => token.quoted || token.value !== "--project")
     .map((token) => token.value);
   const beforeCurrent = hasTrailingSpace ? argumentPrefix : last ? argumentPrefix.slice(0, last.start) : argumentPrefix;
-  return { current, beforeCurrent, commandTokens, projectFlagInTokens, useProject };
+  const unknownOption = tokens.some(
+    (token) =>
+      !token.quoted &&
+      token.value.startsWith("-") &&
+      token.value !== "--project" &&
+      token.value !== "--help" &&
+      token.value !== "-h",
+  );
+  const blankToken = tokens.some((token) => token.value === "");
+  return {
+    current,
+    beforeCurrent,
+    commandTokens,
+    projectFlagInTokens,
+    useProject,
+    unknownOption,
+    blankToken,
+  };
 }
 
 /** Append a typed --project flag, keeping any trailing space for the next argument. */
@@ -135,6 +156,14 @@ function withProject(value: string, context: CompletionContext): string {
   if (!context.useProject) return value;
   const trailing = value.endsWith(" ") ? " " : "";
   return `${value.trimEnd()} --project${trailing}`;
+}
+
+/** Serialize a dynamic value for a completed command line. The command parser has
+ * no escape syntax, so a value containing a quote cannot be offered at all. */
+function quoteArg(value: string): string | undefined {
+  if (value.includes('"') || value.includes("'")) return undefined;
+  if (value === "" || /\s/.test(value) || value.startsWith("-")) return `"${value}"`;
+  return value;
 }
 
 function completionTarget(useProject: boolean, state: SessionState): string {
@@ -154,6 +183,8 @@ function presetCompletionItems(
   const items: ArgumentCompletion[] = [];
   for (const name of presetNames(layer.config)) {
     if (!name.startsWith(current)) continue;
+    const quoted = quoteArg(name);
+    if (quoted === undefined) continue;
     let description = "preset";
     if (name === active) {
       description =
@@ -165,7 +196,7 @@ function presetCompletionItems(
     }
     const needsArgument = action === "copy" || action === "rename";
     items.push({
-      value: withProject(`preset ${action} ${name}${needsArgument ? " " : ""}`, context),
+      value: withProject(`preset ${action} ${quoted}${needsArgument ? " " : ""}`, context),
       label: name,
       description,
     });
@@ -192,8 +223,10 @@ function sessionPresetCompletionItems(
   }
   for (const name of presetNames(layer.config)) {
     if (!name.startsWith(current)) continue;
+    const quoted = quoteArg(name);
+    if (quoted === undefined) continue;
     items.push({
-      value: withProject(`use-session ${name}`, context),
+      value: withProject(`use-session ${quoted}`, context),
       label: name,
       description: name === active ? "on-disk active preset" : "preset",
     });
@@ -209,16 +242,21 @@ function modelCompletionItems(
   trailing = false,
 ): ArgumentCompletion[] | null {
   if (state.availableModels.length === 0) return null;
-  const base = baseTokens.join(" ");
+  const base = baseTokens.map(quoteArg);
+  if (base.some((token) => token === undefined)) return null;
+  const joined = base.join(" ");
   const needle = prefix.toLowerCase();
-  const items = state.availableModels
-    .filter((id) => id.toLowerCase().startsWith(needle))
-    .slice(0, 30)
-    .map((id) => ({
-      value: withProject(`${base} ${id}${trailing ? " " : ""}`, context),
+  const items: ArgumentCompletion[] = [];
+  for (const id of state.availableModels) {
+    if (!id.toLowerCase().startsWith(needle) || items.length >= 30) continue;
+    const quoted = quoteArg(id);
+    if (quoted === undefined) continue;
+    items.push({
+      value: withProject(`${joined} ${quoted}${trailing ? " " : ""}`, context),
       label: id,
       description: "available model",
-    }));
+    });
+  }
   return items.length > 0 ? items : null;
 }
 
@@ -250,20 +288,28 @@ function profileCompletionItems(
   if (effective.warning || !effective.activePreset) return null;
   if (rest.length === 0) {
     const prefix = current.toLowerCase();
-    const items = effective.profiles
-      .filter((profile) => profile.main.toLowerCase().startsWith(prefix))
-      .map((profile) => ({
-        value: withProject(`${sub} ${profile.main} `, context),
+    const items: ArgumentCompletion[] = [];
+    for (const profile of effective.profiles) {
+      if (!profile.main.toLowerCase().startsWith(prefix)) continue;
+      const quoted = quoteArg(profile.main);
+      if (quoted === undefined) continue;
+      items.push({
+        value: withProject(`${sub} ${quoted} `, context),
         label: profile.main,
         description: summarizeSubagents(profile.subagents),
-      }));
+      });
+    }
     return items.length > 0 ? items : null;
   }
   if (sub === "move" && rest.length === 1) {
+    const raw = rest[0];
+    if (!raw) return null;
+    const main = quoteArg(raw);
+    if (main === undefined) return null;
     const items = Object.entries(POSITION_DESCRIPTIONS)
       .filter(([position]) => position.startsWith(current))
       .map(([position, description]) => ({
-        value: withProject(`move ${rest[0]} ${position}`, context),
+        value: withProject(`move ${main} ${position}`, context),
         label: position,
         description,
       }));
@@ -274,19 +320,25 @@ function profileCompletionItems(
     if (!main) return null;
     const profile = effective.profiles.find((item) => item.main.toLowerCase() === main.toLowerCase());
     if (!profile) return null;
+    const quotedMain = quoteArg(profile.main);
+    if (quotedMain === undefined) return null;
     const entries =
       typeof profile.subagents === "string"
         ? sub === "set"
           ? [["*", profile.subagents] as const]
           : []
         : Object.entries(profile.subagents);
-    const items = entries
-      .filter(([agent]) => agent.startsWith(current))
-      .map(([agent, selector]) => ({
-        value: withProject(`${sub} ${profile.main} ${agent}${sub === "set" ? " " : ""}`, context),
+    const items: ArgumentCompletion[] = [];
+    for (const [agent, selector] of entries) {
+      if (!agent.startsWith(current)) continue;
+      const quotedAgent = quoteArg(agent);
+      if (quotedAgent === undefined) continue;
+      items.push({
+        value: withProject(`${sub} ${quotedMain} ${quotedAgent}${sub === "set" ? " " : ""}`, context),
         label: agent,
         description: agent === "*" ? `profile default → ${selector}` : `→ ${selector}`,
-      }));
+      });
+    }
     return items.length > 0 ? items : null;
   }
   return null;
@@ -313,10 +365,15 @@ function showAgentCompletionItems(
   const subagents = profile.subagents;
   const agents = typeof subagents === "string" ? ["*"] : Object.keys(subagents);
   const prefix = current.toLowerCase();
-  const items = agents
-    .filter((agent) => agent.toLowerCase().startsWith(prefix))
-    .map((agent) => ({
-      value: withProject(`show ${modelArg} ${agent}`, context),
+  const quotedModel = quoteArg(modelArg);
+  if (quotedModel === undefined) return null;
+  const items: ArgumentCompletion[] = [];
+  for (const agent of agents) {
+    if (!agent.toLowerCase().startsWith(prefix)) continue;
+    const quotedAgent = quoteArg(agent);
+    if (quotedAgent === undefined) continue;
+    items.push({
+      value: withProject(`show ${quotedModel} ${quotedAgent}`, context),
       label: agent,
       description:
         typeof subagents === "string"
@@ -324,7 +381,8 @@ function showAgentCompletionItems(
           : agent === "*"
             ? `profile default → ${subagents["*"] ?? ""}`
             : `→ ${subagents[agent] ?? ""}`,
-    }));
+    });
+  }
   return items.length > 0 ? items : null;
 }
 
@@ -337,8 +395,11 @@ export function modelSyncArgumentCompletions(
     const context = parseCompletionContext(argumentPrefix);
     if (!context) return null;
     const { current, beforeCurrent, commandTokens, projectFlagInTokens } = context;
+    if (context.unknownOption || context.blankToken) return null;
     if (current.startsWith("-")) {
       if (projectFlagInTokens || !"--project".startsWith(current)) return null;
+      const [flagSub] = commandTokens;
+      if (flagSub !== undefined && !TOP_LEVEL_COMPLETIONS.some((item) => item.label === flagSub)) return null;
       return [{ value: `${beforeCurrent}--project`, label: "--project", description: "Target the project config" }];
     }
     const [sub, ...rest] = commandTokens;
