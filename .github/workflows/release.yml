@@ -47,7 +47,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22.19.0
+          node-version-file: .node-version
+          package-manager-cache: false
 
       - name: Set up npm
         uses: ./.github/actions/setup-npm
@@ -67,12 +68,16 @@ jobs:
           test "$GITHUB_REF" = "refs/tags/$TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Tag $TAG ($(git rev-parse --short HEAD)) is not reachable from origin/main; refusing to publish." >&2
+            exit 1
+          fi
           node scripts/verify-release-tarball.mjs --directory dist --tag "$TAG" --head "$(git rev-parse HEAD)" --github-env "$GITHUB_ENV"
 
       - name: Publish or verify the exact tarball
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016 # The single-quoted JavaScript template literal is intentional.
           LOCAL_INTEGRITY=$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`)' "$TARBALL")
           if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
             PUBLISHED_INTEGRITY=$(npm view "$NAME@$VERSION" dist.integrity)
@@ -118,7 +123,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22.19.0
+          node-version-file: .node-version
+          package-manager-cache: false
 
       - name: Set up npm
         uses: ./.github/actions/setup-npm
@@ -150,6 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME"
+          # shellcheck disable=SC2016 # The single-quoted JavaScript template literal is intentional.
           LOCAL_INTEGRITY=$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`)' "$TARBALL")
           PUBLISHED_INTEGRITY=""
           for _ in $(seq 1 60); do

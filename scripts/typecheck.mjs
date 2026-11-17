@@ -5,22 +5,28 @@ import { fileURLToPath } from "node:url";
 import { resolveCommandProbe } from "./command-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tsconfig = path.join(root, "scripts", "tsconfig.typecheck.json");
+// Shipped sources first, then tests and Bun-only scripts (which also need Bun's ambient types).
+const projects = [
+  path.join(root, "scripts", "tsconfig.typecheck.json"),
+  path.join(root, "scripts", "tsconfig.tests.json"),
+];
 const localTsc = path.join(root, ".github", "omp-tools", "node_modules", "typescript", "bin", "tsc");
-const localNodeTypes = path.join(root, ".github", "omp-tools", "node_modules", "@types", "node");
+const requiredTypes = ["node", "bun"].map((name) => path.join(root, ".github", "omp-tools", "node_modules", "@types", name));
 
-if (!existsSync(localNodeTypes)) {
-  console.error('Missing .github/omp-tools/node_modules/@types/node. Run "npm ci --prefix .github/omp-tools" first.');
-  process.exit(1);
+for (const types of requiredTypes) {
+  if (!existsSync(types)) {
+    console.error(`Missing ${path.relative(root, types)}. Run "npm ci --prefix .github/omp-tools" first.`);
+    process.exit(1);
+  }
 }
 
-let result;
-if (existsSync(localTsc)) {
-  result = spawnSync(process.execPath, [localTsc, "-p", tsconfig], { cwd: root, stdio: "inherit" });
-} else {
+function runTsc(tsconfig) {
+  if (existsSync(localTsc)) {
+    return spawnSync(process.execPath, [localTsc, "-p", tsconfig], { cwd: root, stdio: "inherit" });
+  }
   const command = process.platform === "win32" ? "tsc.cmd" : "tsc";
   const resolved = resolveCommandProbe(command, ["-p", tsconfig]);
-  result = spawnSync(resolved.command, resolved.args, {
+  return spawnSync(resolved.command, resolved.args, {
     cwd: root,
     stdio: "inherit",
     windowsHide: true,
@@ -28,8 +34,14 @@ if (existsSync(localTsc)) {
   });
 }
 
-if (result.error) {
-  console.error(`Failed to launch tsc: ${result.error.message}`);
-  process.exit(1);
+for (const tsconfig of projects) {
+  const result = runTsc(tsconfig);
+  if (result.error) {
+    console.error(`Failed to launch tsc: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error(`Typecheck failed: ${path.relative(root, tsconfig)}`);
+    process.exit(result.status ?? 1);
+  }
 }
-process.exit(result.status ?? 1);

@@ -26,7 +26,7 @@
     "check:versions": "node scripts/check-release-versions.mjs",
     "release:bump": "node scripts/bump-release.mjs",
     "test:graph": "bun scripts/test-load-graph.ts",
-    "test:unit": "bun test test/portable.test.ts test/adapters.test.ts",
+    "test:unit": "bun test --coverage test/portable.test.ts test/adapters.test.ts",
     "test:posix": "bun test test/posix.test.ts",
     "test:release-scripts": "node --test scripts/test-check-release-versions.mjs scripts/test-bump-release.mjs scripts/test-verify-release-tarball.mjs",
     "test:packed": "node scripts/test-packed.mjs",

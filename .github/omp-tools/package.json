@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@oh-my-pi/pi-coding-agent": "18.20.3",
+    "@types/bun": "1.4.4",
     "@types/node": "22.20.5",
     "typescript": "7.0.2"
   }

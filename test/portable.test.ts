@@ -148,7 +148,7 @@ describe("config paths and layer precedence", () => {
 
     // Run ~/ expansion and homedir() fallback in an isolated child process so Bun's startup
     // os.homedir() uses the temporary HOME/USERPROFILE instead of the developer's home.
-    const childEnv = { ...process.env, HOME: home, USERPROFILE: home };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
     delete childEnv.PI_MODEL_SYNC_CONFIG;
     delete childEnv.PI_CODING_AGENT_DIR;
     const result = spawnSync(
@@ -179,7 +179,7 @@ describe("config paths and layer precedence", () => {
     const ompGlobal = path.join(home, ".omp", "agent", "pi-model-sync.json");
     const piGlobal = path.join(home, ".pi", "agent", "pi-model-sync.json");
 
-    const childEnv = { ...process.env, HOME: home, USERPROFILE: home };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
     delete childEnv.PI_MODEL_SYNC_CONFIG;
     delete childEnv.PI_CODING_AGENT_DIR;
     const result = spawnSync(
