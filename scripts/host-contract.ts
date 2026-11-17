@@ -33,7 +33,10 @@ export type UpstreamContextHasRegistry = Assert<Has<UpstreamContext, "modelRegis
 export type UpstreamContextHasUi = Assert<Has<UpstreamContext, "ui">>;
 export type UpstreamRegistryHasFind = Assert<Has<UpstreamModelRegistry, "find">>;
 export type UpstreamRegistryHasAvailable = Assert<Has<UpstreamModelRegistry, "getAvailable">>;
-export type UpstreamRegistryHasAuth = Assert<Has<UpstreamModelRegistry, "hasConfiguredAuth">>;
+export type UpstreamContextHasModel = Assert<Has<UpstreamContext, "model">>;
+export type UpstreamApiHasGetAllTools = Assert<Has<UpstreamAPI, "getAllTools">>;
+export type UpstreamApiHasRegisterCommand = Assert<Has<UpstreamAPI, "registerCommand">>;
+export type UpstreamApiHasSetLabel = Assert<Has<UpstreamAPI, "setLabel">>;
 
 export type OmpSpawnHasModelRole = Assert<Has<BeforeSubagentSpawnEvent, "modelRole">>;
 export type OmpSpawnHasInvocationKind = Assert<Has<BeforeSubagentSpawnEvent, "invocationKind">>;
@@ -44,6 +47,11 @@ export type OmpContextHasHasUI = Assert<Has<OmpContext, "hasUI">>;
 export type OmpUiHasSetStatus = Assert<Has<ExtensionUIContext, "setStatus">>;
 export type OmpUiHasSelect = Assert<Has<ExtensionUIContext, "select">>;
 export type OmpModelsHasList = Assert<Has<ExtensionModelQuery, "list">>;
+export type OmpModelsHasCurrent = Assert<Has<ExtensionModelQuery, "current">>;
+export type OmpModelsHasResolve = Assert<Has<ExtensionModelQuery, "resolve">>;
+export type OmpApiHasGetAllTools = Assert<Has<OmpAPI, "getAllTools">>;
+export type OmpApiHasRegisterCommand = Assert<Has<OmpAPI, "registerCommand">>;
+export type OmpApiHasSetLabel = Assert<Has<OmpAPI, "setLabel">>;
 
 export function probeUpstream(api: UpstreamAPI, ctx: UpstreamContext): void {
   api.on("session_start", (event: UpstreamSessionStart) => {
@@ -68,6 +76,16 @@ export function probeUpstream(api: UpstreamAPI, ctx: UpstreamContext): void {
   void find;
   ctx.ui.setStatus("pi-model-sync", "ok");
   ctx.ui.select("Select", ["a"]);
+  const current: UpstreamContext["model"] = ctx.model;
+  void current;
+  api.getAllTools();
+  api.registerCommand("probe", {
+    description: "probe",
+    getArgumentCompletions: (prefix: string) => (prefix ? null : []),
+    handler: async () => {},
+  });
+  // Upstream's two-parameter form; omp's one-parameter call is probed below.
+  api.setLabel("probe-entry", undefined);
 }
 
 export function probeOmp(api: OmpAPI, ctx: OmpContext): void {
@@ -90,4 +108,15 @@ export function probeOmp(api: OmpAPI, ctx: OmpContext): void {
   ctx.ui.setStatus("pi-model-sync", "ok");
   const hasUI: boolean = ctx.hasUI;
   void hasUI;
+  const currentModel = models.current();
+  void currentModel;
+  const resolved = models.resolve("openai/gpt-6");
+  void resolved;
+  api.getAllTools();
+  api.registerCommand("probe", {
+    description: "probe",
+    getArgumentCompletions: (prefix: string) => (prefix ? null : []),
+    handler: async () => {},
+  });
+  api.setLabel("probe");
 }
