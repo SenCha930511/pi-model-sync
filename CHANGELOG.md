@@ -1,5 +1,17 @@
 # Changelog
 
+
+## 0.6.2 — 2026-11-18
+
+- Fix `remove <main> ""` deleting the whole profile and make `show` reject blank quoted arguments like every other subcommand.
+- Run the bare-id rule on the `:level`-stripped selector base so exact-only plugins treat `gpt-4:high` like `gpt-4`.
+- Accept only registry-confirmed `provider/id` selectors in exact-only plugin dialects and classify conservatively when model enumeration is unavailable.
+- Match plugin schemas by dot-joined property paths, expand local `$ref` targets at the referencing position following RFC 6901, and stop unreferenced `$defs` from satisfying a fingerprint.
+- Fail closed when a config layer cannot be stat'd, refuse writes through unresolvable symlink chains instead of replacing the link, and call `setLabel` only on one-parameter hosts.
+- Quote completion values that would retokenize, return null for malformed prefixes, and keep quoted option-like values literal instead of suggesting the `--project` flag over them.
+- Clear an inherited `PI_MODEL_SYNC_CONFIG` in the packed probes and probe more host surfaces in the installed-host contract check.
+- Strengthen behavioral tests for layer boundaries, cache invalidation, deep clones, multi-mode fixtures, and `doctor` branches, and sync README, llms.txt, and AGENTS.md with the hardened behavior.
+
 ## 0.6.1 — 2026-11-17
 
 - Add per-session routing controls: `use-session`, `pause`, `resume`, `status`, `log`, `doctor`, and `init`.
