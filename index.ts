@@ -35,6 +35,10 @@
  * 17. Session presets and pauses are in memory; command writes stay on disk.
  * 18. A slash is provider/id first and a bare id second (model ids may contain `/`).
  * 19. Config writes follow symlinks and surface unknown keys before a rewrite.
+ * 20. Exact-only plugin dialects accept only registry-confirmed provider/id selectors.
+ * 21. Schema fingerprints are property paths; unreferenced $defs do not count.
+ * 22. A config layer that cannot be stat'd counts as present (fail closed).
+ * 23. An unresolvable symlink chain is refused rather than renamed over.
  */
 // Type-only and erased at runtime; the upstream package name keeps npm/pi-gallery tooling happy,
 // while omp supplies the same ambient ExtensionAPI surface under either name.

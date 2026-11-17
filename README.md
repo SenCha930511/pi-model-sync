@@ -132,10 +132,11 @@ A minimal named-preset config looks like this:
 `before_subagent_spawn` fires in the spawning session, including nested spawns.
 
 1. Read the spawning session's current model.
-2. Find the first profile whose `main` matches that model.
-3. Pick the subagent selector with the exact agent key, then the `"*"` default.
-4. Validate the selector with `ctx.models.resolve()`.
-5. Return `[selector, ...originalPatterns]`. The original patterns stay as retry fallbacks.
+2. Leave the spawn alone when it carries an explicit per-call model: the event reports an `invocationKind` but no `modelRole`, and none of its patterns matches the current model. A spawn with a model role, a pattern list that includes the current model, or a host that does not report `invocationKind` stays routable.
+3. Find the first profile whose `main` matches that model.
+4. Pick the subagent selector with the exact agent key, then the `"*"` default.
+5. Validate the selector with `ctx.models.resolve()`.
+6. Return `[selector, ...originalPatterns]`. The original patterns stay as retry fallbacks.
 
 A failed lookup, an unresolvable selector, or any error leaves the spawn untouched. This path never throws.
 
@@ -162,14 +163,14 @@ When a selector cannot be resolved, that spawn or delegation is not intercepted.
 
 ### Session controls
 
-These commands affect only the current session. They never write a config file, so switching a preset in one terminal does not change another terminal's routing.
+These commands change only the current session and never write a config file, so switching a preset in one terminal does not change another terminal's routing.
 
-- `/model-sync use-session <preset|off>` routes this session with an existing preset from the active layer. `off` clears the override.
+- `/model-sync use-session <preset|off>` routes this session with an existing preset from the active layer. `off` clears the override. Selecting a preset also resumes routing when the session is paused; `off` leaves a pause in place.
 - `/model-sync pause` stops routing for this session; `/model-sync resume` re-enables it. A session override survives a pause.
 - `/model-sync status [off]` prints the routing state and sets the status bar when the host has one. `status off` clears the bar. Other session commands update the bar only while it is enabled.
 - `/model-sync log [clear]` prints the last 50 routing decisions for this session, including skipped selectors and their reasons.
-- `/model-sync doctor` scans the active and inactive layers, every preset, and every profile. It reports unknown keys, shadowed literal and glob rules with the layer named, selectors the host or installed plugins cannot resolve, and agent keys that differ only by case.
-- `/model-sync init` creates a starter named preset from the current model. It refuses to overwrite an existing file and reports a corrupt one instead of overwriting it.
+
+Two nearby commands are not session controls: `/model-sync doctor` is read-only but scans the active and inactive layers, every preset, and every profile, reporting unknown keys, shadowed rules with the layer named, selectors the host or installed plugins cannot resolve, and agent keys that differ only by case. `/model-sync init` writes a starter named preset from the current model; it refuses to overwrite an existing file and reports a corrupt one instead of overwriting it.
 
 Writes still target the on-disk active preset while a session override is active; the command tells you when that happens.
 
@@ -190,9 +191,9 @@ Two layers, same JSON format. A file is either a **named-preset** document or th
 
 A missing config file is not an error. `/model-sync list` and `/model-sync preset list` print the first-run hint, and the first write creates the file.
 
-**An existing project file wholly replaces the global file.** There is no per-key merge. A broken-JSON project file still counts as "exists" and fails closed. Each layer carries its own `presets` and `activePreset`, so the two layers select presets independently.
+**An existing project file wholly replaces the global file.** There is no per-key merge. A broken-JSON project file still counts as "exists" and fails closed, and so does a project file that cannot even be stat'd (for example, a parent directory without search permission): the layer stays selected and routing fails closed rather than falling back to the global file. Each layer carries its own `presets` and `activePreset`, so the two layers select presets independently.
 
-Writes target the global file by default. Any subcommand with `--project` targets the project file. When the project file exists and you write the global file without `--project`, the notification reminds you that the project layer overrides it. The write is atomic, follows a symlink to its target, and invalidates the read cache.
+Writes target the global file by default. Any subcommand with `--project` targets the project file. When the project file exists and you write the global file without `--project`, the notification reminds you that the project layer overrides it. The write is atomic, follows a symlink to its target, refuses a symlink chain it cannot resolve instead of replacing the link, and invalidates the read cache.
 
 ## Config schema
 
@@ -375,7 +376,7 @@ Routing starts only after the host registers the plugin's tool. A plugin that fa
 - A non-empty `children[]` collects one slot per child with no `model`; a missing `agent` falls back to `"*"`. An empty `children[]` is treated as a single spawn.
 - An explicit top-level or per-child `model` wins and is never overwritten.
 - The agent key is `agent`, otherwise `"*"`.
-- Only exact `provider/id` selectors are accepted. A bare id, `@alias`, or glob is skipped rather than guessed, because the wrong provider would be worse than default routing. A known `:level` suffix is split into `thinking`.
+- Only exact `provider/id` selectors are accepted, and the host's model listing must confirm them. A bare id, `@alias`, or glob is skipped rather than guessed, because the wrong provider would be worse than default routing. When the host cannot enumerate models, or the selector does not appear in the listing, the selector is skipped for the same reason. A known `:level` suffix is split into `thinking`.
 - The plugin honors its own `allow-model-override: false` and `allowed-models` policies.
 
 ### Rules that apply to every adapter
@@ -415,11 +416,11 @@ All command help, output, notifications, and config error messages are in Englis
 | `/model-sync help` | Show the top-level usage |
 | `/model-sync preset help` | Show the preset usage |
 
-Commands reject extra arguments and unknown `--` options with a usage hint. Single or double quotes keep a value with spaces together; preset names still cannot contain whitespace. A missing config file is not an error. `list` and `preset list` print the first-run hint, and the first write creates the file.
+Commands reject extra arguments, unknown `--` options, and blank quoted arguments (for example `remove <main> ""`) with a usage hint. Single or double quotes keep a value with spaces together; preset names still cannot contain whitespace. A missing config file is not an error. `list` and `preset list` print the first-run hint, and the first write creates the file.
 
 `add`, `set`, `remove`, and `move` edit only the active preset of the target layer and refuse to write when no preset is active or the active name dangles. `preset create`, `preset copy`, and `preset rename` leave the active profile list unchanged; rename updates the active name when the old name was active. `preset list` always reports the active layer, so `--project` only affects writes for that command.
 
-`show` reports the host resolution and the installed plugin dialects that accept each selector. Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add` completes existing profile `main` values and authenticated model ids for the first argument, and model ids for the second. `set`, `remove`, and `move` complete existing profile `main` values and agent keys from the target layer's active preset. `show` completes the model and, after a model, the agent keys from the matched profile. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Completion also suggests `off` or `clear` for `status` and `log`. Preset names are global by default; include `--project` before the name to complete project-layer names.
+`show` reports the host resolution and the installed plugin dialects that accept each selector. Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add` completes existing profile `main` values and authenticated model ids for the first argument, and model ids for the second. `set` and `remove` complete existing profile `main` values and agent keys from the target layer's active preset; `move` completes `main` values and the position keywords `top`, `bottom`, `up`, and `down`. `show` completes the model and, after a model, the agent keys from the matched profile. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Completion also suggests `off` or `clear` for `status` and `log`. Completed values that contain whitespace or would parse as an option are quoted, a stored value the parser cannot express is not offered, and malformed prefixes (an unknown subcommand, a blank argument, or an unknown option) return no completion. Preset names are global by default; include `--project` before the name to complete project-layer names.
 
 ## Updating
 
