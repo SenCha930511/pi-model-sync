@@ -129,6 +129,15 @@ describe("parsing, projection, cloning, and atomic writes", () => {
       warning: "No active preset is selected; no profiles are active.",
     });
 
+    const nullPreset = path.join(dir, "null-preset.json");
+    writeFileSync(nullPreset, JSON.stringify({ activePreset: null, presets: { daily: [{ main: "*", subagents: "m" }] } }));
+    const nullLayer = readLayer(nullPreset);
+    expect(nullLayer.error).toBeNull();
+    expect(projectActiveProfiles(nullLayer.config)).toEqual({
+      profiles: [],
+      warning: "No active preset is selected; no profiles are active.",
+    });
+
     const dangling = path.join(dir, "dangling.json");
     writeFileSync(dangling, JSON.stringify({ activePreset: "missing", presets: { daily: [{ main: "*", subagents: "m" }] } }));
     expect(projectActiveProfiles(readLayer(dangling).config)).toEqual({
@@ -199,6 +208,18 @@ describe("parsing, projection, cloning, and atomic writes", () => {
     if (isNamedConfig(cloned)) {
       cloned.presets.a![0]!.main = "mutated";
       expect((read.config as { presets: Record<string, Array<{ main: string }>> }).presets.a![0]!.main).toBe("openai/gpt-6");
+      const nested = cloned.presets.a![0]!;
+      if (typeof nested.subagents !== "string") {
+        nested.subagents["scout"] = "mutated";
+        delete nested.subagents["*"];
+      }
+      const cachedA = (read.config as {
+        presets: Record<string, Array<{ subagents: Record<string, string> }>>;
+      }).presets.a![0]!;
+      expect(cachedA.subagents["*"]).toBe("openai/mini");
+      expect(cachedA.subagents["scout"]).toBe("openai/scout");
+      cloned.presets.b![0]!.main = "mutated";
+      expect(getPresetProfiles(read.config, "b")?.[0]?.main).toBe("anthropic/claude-*");
       expect(presetNames(cloned)).toEqual(["a", "b"]);
       expect(getPresetProfiles(cloned, "b")?.[0]?.subagents).toBe("anthropic/haiku");
     }
@@ -213,6 +234,15 @@ describe("parsing, projection, cloning, and atomic writes", () => {
     expect(isValidPresetName("")).toBe(false);
   });
 
+  test("a content-changing rewrite is visible through the cache", () => {
+    const dir = makeTempDir();
+    const file = path.join(dir, "cache.json");
+    writeConfig(file, { activePreset: "a", presets: { a: [{ main: "openai/gpt-6", subagents: "openai/old" }] } });
+    expect(projectActiveProfiles(readLayer(file).config).profiles[0]?.subagents).toBe("openai/old");
+
+    writeConfig(file, { activePreset: "a", presets: { a: [{ main: "openai/gpt-6", subagents: "openai/new" }] } });
+    expect(projectActiveProfiles(readLayer(file).config).profiles[0]?.subagents).toBe("openai/new");
+  });
 
   test("warns on unknown keys and parses agentMatch", () => {
     const dir = makeTempDir();
@@ -259,6 +289,35 @@ describe("extension hooks (omp & upstream pi)", () => {
     const host = createHostHarness({ upstreamLabel: true });
     expect(host.labelCalls).toEqual([]);
     expect(host.label).toBeUndefined();
+  });
+
+  test("a hostile event after model resolution still returns undefined", () => {
+    const host = createHostHarness();
+    const dir = makeTempDir();
+    writeConfig(path.join(dir, "sync.json"), {
+      profiles: [{ main: "openai/gpt-6", subagents: { explore: "openai/mini" } }],
+    });
+    process.env.PI_MODEL_SYNC_CONFIG = path.join(dir, "sync.json");
+    const ctx = {
+      cwd: dir,
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+      },
+    };
+    try {
+      expect(host.emitSpawn({ agent: "explore" }, ctx)).toBeDefined();
+      const hostile: Record<string, unknown> = {};
+      Object.defineProperty(hostile, "agent", {
+        get() {
+          throw new Error("hostile getter");
+        },
+        enumerable: true,
+      });
+      expect(host.emitSpawn(hostile, ctx)).toBeUndefined();
+    } finally {
+      delete process.env.PI_MODEL_SYNC_CONFIG;
+    }
   });
 
   test("before_subagent_spawn routes, preserves fallback patterns, warns once in TUI, and never throws", () => {

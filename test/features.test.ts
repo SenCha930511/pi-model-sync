@@ -98,6 +98,26 @@ describe("session routing controls", () => {
     expect(normal.model).toEqual(["openai/mini"]);
   });
 
+  test("the project layer replaces global routing without a session override", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      activePreset: "global",
+      presets: { global: [{ main: "*", subagents: "openai/global" }] },
+    });
+    writeConfig(getProjectConfigPath(cwd), {
+      activePreset: "project",
+      presets: { project: [{ main: "*", subagents: "openai/project" }] },
+    });
+    const ctx = modelCtx(cwd);
+    const routed = host.emitSpawn({ agent: "explore" }, ctx) as { model: string[] };
+    expect(routed.model).toEqual(["openai/project"]);
+
+    const rejected = await host.runCommand("use-session global", ctx);
+    expect(rejected[0]?.level).toBe("warning");
+    expect(rejected[0]?.message).toContain("global");
+  });
+
   test("use-session reads the active project layer", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();
@@ -342,6 +362,27 @@ describe("doctor and init", () => {
     expect(doctor[0]?.message).toContain("may be shadowed by earlier profile");
     expect(doctor[0]?.message).toContain("[global]");
     expect(doctor[0]?.message).toContain("[project]");
+  });
+
+  test("doctor reports faults in inactive presets and host-unresolvable selectors", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      activePreset: "daily",
+      presets: {
+        daily: [{ main: "openai/gpt-6", subagents: "openai/mini" }],
+        archive: [{ main: "openai/gpt-6", subagents: "missing/model" }],
+      },
+    });
+    const ctx = modelCtx(cwd, {
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => false,
+      },
+    });
+    const doctor = await host.runCommand("doctor", ctx);
+    expect(doctor[0]?.message).toContain("archive");
+    expect(doctor[0]?.message).toContain("cannot be resolved by this host");
   });
 
   test("doctor reports a clean config", async () => {
@@ -640,6 +681,17 @@ describe("routing hooks", () => {
       ctx,
     ) as { model: string[] };
     expect(routedList.model).toEqual(["openai/mini", "openai/gpt-6", "openai/fallback"]);
+
+    const fallbackFirst = host.emitSpawn(
+      {
+        agent: "explore",
+        patterns: ["openai/fallback", "openai/gpt-6"],
+        invocationKind: "task",
+        modelRole: undefined,
+      },
+      ctx,
+    ) as { model: string[] };
+    expect(fallbackFirst.model).toEqual(["openai/mini", "openai/fallback", "openai/gpt-6"]);
 
     const role = host.emitSpawn(
       { agent: "explore", patterns: ["openai/other"], invocationKind: "task", modelRole: "task" },
