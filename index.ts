@@ -48,10 +48,11 @@ import type { ExtensionContextLike, SubagentSpawnEvent, ToolCallEventLike } from
 export default function modelSync(pi: ExtensionAPI): void {
   const state = createSessionState();
 
-  // Upstream pi's setLabel is (entryId, label)-shaped; skip when the omp usage is
-  // incompatible there — functionality is unaffected.
+  // omp's setLabel(label) tags the extension. Upstream pi's setLabel(entryId, label)
+  // is an entry-bookmark API: a one-argument call would clear the label of a
+  // nonexistent entry instead of throwing, so gate on the declared arity.
   try {
-    if ("setLabel" in pi && typeof pi.setLabel === "function") {
+    if ("setLabel" in pi && typeof pi.setLabel === "function" && pi.setLabel.length === 1) {
       pi.setLabel("Model Sync");
     }
   } catch {}
