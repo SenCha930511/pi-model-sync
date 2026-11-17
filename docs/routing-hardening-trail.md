@@ -52,6 +52,28 @@ Run date: 2026-11-17. Branch: `feat/routing-hardening`.
 - No `CHANGELOG.md` entry was added because `scripts/check-release-versions.mjs` requires the first `##` heading to match the package version; this branch does not bump the version.
 - omp does not expose `perCallModel` on the spawn event. An explicit per-call model identical to the current model is indistinguishable from a normal spawn, so the guard routes it.
 - An agent frontmatter model with no `modelRole` is indistinguishable from an explicit per-call model, so the guard skips routing it.
-- Completion values are not re-quoted when a stored profile or agent name contains whitespace; accepting such a completion can add extra arguments.
 - The doctor glob probe covers fully shadowed globs. Partial overlaps can go unreported.
 - Interactive TUI behavior was exercised through the host harness and the packed RPC probe, not through a live terminal session. The manual checklist in `AGENTS.md` covers the remaining visual checks.
+
+## Second review round (fix/review-hardening)
+
+A full static review of the merged branch found gaps in the guards above. Each fix landed
+with a failing test first; the decisions extend the legend in `index.ts` as 20-23.
+
+| Area | Decision | Evidence |
+|---|---|---|
+| `remove` blank agent | A blank quoted agent argument is rejected at the dispatch boundary instead of deleting the whole profile. | `test/commands.test.ts` "remove rejects a blank agent argument instead of deleting the profile" |
+| `set <main> *` collapse | The default-only map collapses to the plain string, mirroring `remove`. | `test/commands.test.ts` "set * collapses a default-only map back to the plain string form" |
+| `move` boundaries | All four positions refuse at warning level with one wording. | `test/commands.test.ts` "move handles bottom, down, edges, single profiles, and invalid positions" |
+| `:level` bare-id rule | The bare-id check runs on the `:level`-stripped base for every dialect. | `test/adapters.test.ts` "an exact-only plugin rejects a bare id" |
+| Exact-only classification (decision 20) | `selectorKind` returns `unknown` without enumeration; exact-only dialects accept only registry-confirmed `provider-id`. | `test/resolver.test.ts` "an exact-only plugin rejects selectors the host cannot confirm as provider/id" |
+| Path-aware fingerprints (decision 21) | Fingerprints are dot-joined property paths; unreferenced `$defs` and nested-only fields cannot satisfy them. | `test/adapters.test.ts` "a nested or definition-only model field does not satisfy the fingerprint", "resolves local $ref targets at the referencing position" |
+| Fail-closed stat (decision 22) | A stat error other than a missing path counts the layer as present; routing fails closed instead of falling back. | `test/posix.test.ts` "an unstatable project layer fails closed instead of falling back to global" |
+| Symlink refusal (decision 23) | A chain that cannot be resolved within 8 links is refused; rename never replaces an unresolved link. | `test/posix.test.ts` "writeConfig refuses a symlink chain it cannot resolve" |
+| `setLabel` arity | The one-argument call is gated on the host's declared arity; upstream's entry-bookmark form is never called. | `test/portable.test.ts` "registration skips an upstream-shaped setLabel" |
+| Completion quoting | Dynamic values are serialized through a shared quoter; unquotable values are not offered; malformed prefixes return `null`. | `test/features.test.ts` "quotes dynamic values and returns null for malformed prefixes" |
+| Cache and clone proof | A content-changing rewrite is read back through the cache (both symlink paths); nested-map and sibling mutations plus a real `preset copy` prove isolation. | `test/portable.test.ts` "a content-changing rewrite is visible through the cache", `test/posix.test.ts` "a rewrite through a symlink refreshes both cache entries", `test/commands.test.ts` preset copy assertions |
+| Project-layer routing | Routing without a session override uses the project layer; a global-only preset name is rejected. | `test/features.test.ts` "the project layer replaces global routing without a session override" |
+| Multi-pattern guard | A pattern list whose first entry does not match still routes when a later entry does. | `test/features.test.ts` "leaves an explicit per-call model alone but routes a normal spawn" |
+| Host contract | The probe now compiles calls for `models.current`, `models.resolve`, `getAllTools`, `registerCommand` with its completion callback, upstream `ctx.model`, and both `setLabel` arities. | `npm run typecheck` |
+| Packed isolation | The packed probes clear an inherited `PI_MODEL_SYNC_CONFIG`. | `npm run test:packed` |
