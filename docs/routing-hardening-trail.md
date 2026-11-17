@@ -31,7 +31,7 @@ Run date: 2026-11-17. Branch: `feat/routing-hardening`.
 | Session commands | `use-session`, `pause`, `resume`, `status`, `log`, `doctor`, and `init` are implemented; none of the session controls writes. | `test/features.test.ts` session, doctor, and init groups |
 | Host contract | `scripts/host-contract.ts` compiles against the installed omp and upstream pi types. | `npm run typecheck` |
 | Packed integration | The packed tarball loads in omp and executes `/model-sync list` in upstream pi RPC against an isolated config. | `npm run test:packed` |
-| Coverage | 105 tests; 95.64% lines, 99.21% functions; per-file ratchet set to 89% lines and 95% functions. | `npm run test:unit` |
+| Coverage | 104 unit tests plus 3 POSIX tests; 95.58% lines, 99.21% functions; per-file ratchet set to 88% lines and 95% functions. | `npm run test:unit`, `npm run test:posix` |
 
 ## Open items
 
