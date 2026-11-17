@@ -1,0 +1,61 @@
+name: Host canary
+
+# Weekly, non-blocking check against the newest omp and upstream pi releases.
+# CI pins both hosts in .github/omp-tools; this catches host API drift before Dependabot does.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-canary
+  cancel-in-progress: true
+
+jobs:
+  latest-hosts:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          npm-cache: "false"
+
+      - name: Install the latest hosts
+        shell: bash
+        # Installing unpinned @latest hosts outside the lockfile is the point of this canary.
+        run: | # zizmor: ignore[adhoc-packages]
+          set -euo pipefail
+          npm install --prefix "$GITHUB_WORKSPACE/.github/omp-tools" --no-save --no-audit --no-fund \
+            @oh-my-pi/pi-coding-agent@latest @earendil-works/pi-coding-agent@latest
+          printf '%s\n' "$(omp --version)" "pi $(pi --version)"
+
+      - name: Prepare isolated home
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/omp-home"
+
+      - name: Run verification against the latest hosts
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/omp-home
+          USERPROFILE: ${{ runner.temp }}/omp-home
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npm run check:portable
+          else
+            npm run check
+          fi

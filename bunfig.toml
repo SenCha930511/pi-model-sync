@@ -1,0 +1,5 @@
+[test]
+# Per-file ratchet for `npm run test:unit` (only enforced with --coverage).
+# Set just below the current lowest file (index.ts: ~69.9% lines, ~89.3% functions).
+# Raise these when coverage improves; never lower them to make a change pass.
+coverageThreshold = { lines = 0.68, functions = 0.88 }

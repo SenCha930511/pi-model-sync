@@ -29,7 +29,8 @@ function walk(file: string): void {
   const code = fs.readFileSync(resolved, "utf8");
   for (const item of transpiler.scanImports(code)) {
     const spec = item.path;
-    if (item.kind === "import-type" || spec.startsWith("node:")) continue;
+    // Bun's scanImports already drops type-only imports, so only runtime imports reach here.
+    if (spec.startsWith("node:")) continue;
     if (!spec.startsWith(".") && !path.isAbsolute(spec)) {
       offenders.push({ file: path.relative(root, resolved), spec });
       continue;

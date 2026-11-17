@@ -33,6 +33,8 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
+        with:
+          npm-cache: "false"
 
       - name: Verify the exact release tag and metadata
         env:
@@ -44,7 +46,10 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Tag $TAG ($(git rev-parse --short HEAD)) is not reachable from origin/main. Merge the release commit into main before pushing the tag, then re-run this workflow." >&2
+            exit 1
+          fi
           node scripts/check-release-versions.mjs --release --tag "$TAG" --notes-output "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
 

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.typecheck.json",
+  "compilerOptions": {
+    "types": ["node", "bun"]
+  },
+  "files": [
+    "./host-stub.d.ts",
+    "./test-load-graph.ts",
+    "../test/portable.test.ts",
+    "../test/adapters.test.ts",
+    "../test/posix.test.ts"
+  ]
+}
