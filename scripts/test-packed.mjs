@@ -187,6 +187,9 @@ try {
     HOME: ompHome,
     USERPROFILE: ompHome,
     PI_CODING_AGENT_DIR: path.join(ompHome, "agent"),
+    // PI_MODEL_SYNC_CONFIG outranks PI_CODING_AGENT_DIR; an inherited value would
+    // silently redirect the probe away from the isolated home.
+    PI_MODEL_SYNC_CONFIG: "",
   };
   const ompCommand = resolveOmpCommand(root);
   const modelsProbe = resolveCommandProbe(ompCommand, ["models", "--no-extensions", "-e", installedEntry, "--json"]);
@@ -215,6 +218,7 @@ try {
     HOME: piHome,
     USERPROFILE: piHome,
     PI_CODING_AGENT_DIR: piAgentDir,
+    PI_MODEL_SYNC_CONFIG: "",
     PI_OFFLINE: "1",
   };
   const piCommand = resolvePiCommand(root);
