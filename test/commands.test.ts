@@ -172,6 +172,19 @@ describe("profile commands", () => {
     });
   });
 
+  test("show rejects blank quoted arguments", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    const ctx = modelCtx(cwd);
+    writeGlobal(cwd, { profiles: [{ main: "openai/gpt-6", subagents: "openai/mini" }] });
+    const blankAgent = await host.runCommand('show openai/gpt-6 ""', ctx);
+    expect(blankAgent[0]?.level).toBe("warning");
+    expect(blankAgent[0]?.message).toContain("Usage: /model-sync show");
+    const blankModel = await host.runCommand('show ""', ctx);
+    expect(blankModel[0]?.level).toBe("warning");
+    expect(blankModel[0]?.message).toContain("Usage: /model-sync show");
+  });
+
   test("move handles bottom, down, edges, single profiles, and invalid positions", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();

@@ -207,6 +207,38 @@ describe("schema fingerprints", () => {
     expect(wrappedProps.has("model")).toBe(false);
     expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, wrappedProps)).toBe(false);
   });
+
+  test("resolves RFC 6901 pointers with escapes and array indices", () => {
+    const escaped: ToolInfoLike = {
+      name: "subagent",
+      parameters: {
+        type: "object",
+        properties: { calls: { $ref: "#/$defs/call~1array" } },
+        $defs: {
+          "call/array": {
+            type: "array",
+            items: { type: "object", properties: { agent: {}, model: {} } },
+          },
+        },
+      },
+    };
+    const escapedProps = schemaProps(escaped);
+    expect(escapedProps.has("calls")).toBe(true);
+    expect(escapedProps.has("calls.model")).toBe(true);
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "mjakl")!, escapedProps)).toBe(true);
+
+    const indexed: ToolInfoLike = {
+      name: "subagent",
+      parameters: {
+        type: "object",
+        properties: { subagent_type: { $ref: "#/allOf/0" } },
+        allOf: [{ type: "object", properties: { prompt: {}, model: {} } }],
+      },
+    };
+    const indexedProps = schemaProps(indexed);
+    expect(indexedProps.has("subagent_type")).toBe(true);
+    expect(indexedProps.has("subagent_type.model")).toBe(true);
+  });
 });
 
 describe("adapter selection", () => {

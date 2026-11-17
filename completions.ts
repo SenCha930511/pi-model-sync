@@ -62,6 +62,8 @@ const POSITION_DESCRIPTIONS: Record<string, string> = {
 
 interface CompletionContext {
   current: string;
+  /** The token being completed was quoted, so it is a value and never an option. */
+  currentQuoted: boolean;
   beforeCurrent: string;
   commandTokens: string[];
   projectFlagInTokens: boolean;
@@ -124,9 +126,10 @@ function parseCompletionContext(argumentPrefix: string): CompletionContext | nul
   const hasTrailingSpace = /\s$/.test(argumentPrefix);
   const last = tokens[tokens.length - 1];
   const current = hasTrailingSpace ? "" : last?.value ?? "";
+  const currentQuoted = !hasTrailingSpace && last?.quoted === true;
   if (!hasTrailingSpace && last) tokens.pop();
   const projectFlagInTokens = tokens.some((token) => !token.quoted && token.value === "--project");
-  const useProject = projectFlagInTokens || current === "--project";
+  const useProject = projectFlagInTokens || (current === "--project" && !currentQuoted);
   const commandTokens = tokens
     .filter((token) => token.quoted || token.value !== "--project")
     .map((token) => token.value);
@@ -139,9 +142,11 @@ function parseCompletionContext(argumentPrefix: string): CompletionContext | nul
       token.value !== "--help" &&
       token.value !== "-h",
   );
-  const blankToken = tokens.some((token) => token.value === "");
+  // A popped blank token is always a closed "" pair, and every subcommand rejects it.
+  const blankToken = tokens.some((token) => token.value === "") || (currentQuoted && current === "");
   return {
     current,
+    currentQuoted,
     beforeCurrent,
     commandTokens,
     projectFlagInTokens,
@@ -396,10 +401,17 @@ export function modelSyncArgumentCompletions(
     if (!context) return null;
     const { current, beforeCurrent, commandTokens, projectFlagInTokens } = context;
     if (context.unknownOption || context.blankToken) return null;
-    if (current.startsWith("-")) {
+    if (current.startsWith("-") && !context.currentQuoted) {
       if (projectFlagInTokens || !"--project".startsWith(current)) return null;
-      const [flagSub] = commandTokens;
+      const [flagSub, flagAction] = commandTokens;
       if (flagSub !== undefined && !TOP_LEVEL_COMPLETIONS.some((item) => item.label === flagSub)) return null;
+      if (
+        flagSub === "preset" &&
+        flagAction !== undefined &&
+        !PRESET_COMPLETIONS.some((item) => item.label === flagAction)
+      ) {
+        return null;
+      }
       return [{ value: `${beforeCurrent}--project`, label: "--project", description: "Target the project config" }];
     }
     const [sub, ...rest] = commandTokens;
