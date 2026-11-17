@@ -347,8 +347,13 @@ describe("selector dialects", () => {
 
   test("an exact-only plugin rejects a bare id", () => {
     expect(normalizeSelector("claude-haiku-4", dialect("edxeth"))).toBeUndefined();
+    expect(normalizeSelector("claude-haiku-4:high", dialect("edxeth"))).toBeUndefined();
     expect(normalizeSelector("anthropic/claude-haiku-4", dialect("edxeth"))).toEqual({
       base: "anthropic/claude-haiku-4",
+    });
+    expect(normalizeSelector("anthropic/claude-haiku-4:high", dialect("edxeth"))).toEqual({
+      base: "anthropic/claude-haiku-4",
+      thinking: "high",
     });
   });
 
