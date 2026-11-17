@@ -53,6 +53,8 @@ export function useIsolatedConfig(): void {
 }
 
 export interface HostHarnessOptions {
+  /** Simulate upstream pi's two-parameter setLabel(entryId, label) shape. */
+  upstreamLabel?: boolean;
   failLabel?: boolean;
   failSpawnHook?: boolean;
   failSessionHook?: boolean;
@@ -68,13 +70,22 @@ export function createHostHarness(options: HostHarnessOptions = {}) {
   const hooks = new Map<string, (...args: unknown[]) => unknown>();
   let command: MockCommand | undefined;
   let label: string | undefined;
+  const labelCalls: string[] = [];
   const statuses: Array<{ key: string; text: string | undefined }> = [];
 
   const api = {
-    setLabel(next: string): void {
-      if (options.failLabel) throw new Error("incompatible setLabel");
-      label = next;
-    },
+    ...(options.upstreamLabel
+      ? {
+          setLabel(entryId: string, _label?: string): void {
+            labelCalls.push(entryId);
+          },
+        }
+      : {
+          setLabel(next: string): void {
+            if (options.failLabel) throw new Error("incompatible setLabel");
+            label = next;
+          },
+        }),
     on(event: string, handler: (...args: unknown[]) => unknown): void {
       if (options.failSpawnHook && event === "before_subagent_spawn") {
         throw new Error("unsupported event");
@@ -105,6 +116,9 @@ export function createHostHarness(options: HostHarnessOptions = {}) {
   return {
     get label() {
       return label;
+    },
+    get labelCalls() {
+      return labelCalls.slice();
     },
     hooks,
     statuses,

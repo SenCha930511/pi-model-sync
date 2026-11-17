@@ -254,6 +254,13 @@ describe("matching and selector picking", () => {
 });
 
 describe("extension hooks (omp & upstream pi)", () => {
+
+  test("registration skips an upstream-shaped setLabel", () => {
+    const host = createHostHarness({ upstreamLabel: true });
+    expect(host.labelCalls).toEqual([]);
+    expect(host.label).toBeUndefined();
+  });
+
   test("before_subagent_spawn routes, preserves fallback patterns, warns once in TUI, and never throws", () => {
     const dir = makeTempDir();
     const cfg = path.join(dir, "sync.json");
