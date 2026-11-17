@@ -21,12 +21,12 @@ npm run check
 
 `npm run check` runs with an isolated HOME and no credentials. `omp models` may perform public model-catalog discovery.
 
-- `npm run typecheck`: strict TypeScript check (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`) of `adapters.ts`, `config.ts`, and `index.ts` (`scripts/tsconfig.typecheck.json`), then of `test/*.test.ts` and `scripts/test-load-graph.ts` with Bun types (`scripts/tsconfig.tests.json`), using `scripts/host-stub.d.ts`.
+- `npm run typecheck`: strict TypeScript check (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`) of the shipped modules (`adapters.ts`, `config.ts`, `resolver.ts`, `session.ts`, `hooks.ts`, `completions.ts`, `commands.ts`, `index.ts`) via `scripts/tsconfig.typecheck.json` and `scripts/host-stub.d.ts`, then of the tests and `scripts/test-load-graph.ts` with Bun types via `scripts/tsconfig.tests.json`, then of `scripts/host-contract.ts` against the installed omp and upstream pi type packages via `scripts/tsconfig.hosts.json`.
 - `npm run check:versions`: verifies all six synchronized version declarations across `package.json`, `README.md`, `llms.txt`, and `AGENTS.md`.
 - `npm run test:release-scripts`: `node:test` suites for `check-release-versions.mjs`, `bump-release.mjs`, and `verify-release-tarball.mjs`.
 - `npm run test:graph`: verifies the load-time import graph has zero runtime package imports and passes the Bun default-export smoke check.
-- `npm run test:unit`: cross-platform behavioral suites (`test/portable.test.ts`, `test/adapters.test.ts`) with coverage. `bunfig.toml` sets a per-file line/function threshold just below current coverage; raise it when coverage improves and never lower it to make a change pass.
-- `npm run test:packed`: packs the tarball, checks the exact `files` whitelist, installs cleanly into a temporary consumer directory with `--omit=dev`, checks zero runtime dependencies, runs the Bun import check, loads the installed extension in `omp models --no-extensions -e ... --json`, and checks that upstream `pi --mode rpc` registers `/model-sync` from the installed tarball (`get_commands`).
+- `npm run test:unit`: cross-platform behavioral suites (`test/portable.test.ts`, `test/adapters.test.ts`, `test/commands.test.ts`, `test/features.test.ts`, `test/resolver.test.ts`) with the shared host harness in `test/harness.ts`, under coverage. `bunfig.toml` sets a per-file line/function threshold just below current coverage; raise it when coverage improves and never lower it to make a change pass.
+- `npm run test:packed`: packs the tarball, checks the exact `files` whitelist, installs cleanly into a temporary consumer directory with `--omit=dev`, checks zero runtime dependencies, runs the Bun import check, loads the installed extension in `omp models --no-extensions -e ... --json`, and checks that upstream `pi --mode rpc` registers `/model-sync` and executes `/model-sync list` from the installed tarball (`get_commands` plus a prompt).
 - `npm run check:posix`: POSIX-only invariants (`test/posix.test.ts`, skipped by `check:portable` on Windows).
 
 For interactive testing under a real host:
@@ -41,7 +41,7 @@ Open a real pull request against `main`.
 
 - Use a conventional PR title with a lowercase prefix, a colon, and an imperative summary without a trailing period (for example, `fix: preserve explicit call model`). The trusted `PR title` (`pull_request_target`) workflow enforces this. `CI` runs the code checks.
 - Keep the code style: 2-space indent, double quotes, `node:` builtins, extensionless internal imports, `unknown` + guards (never `any`), explicit return types.
-- Update `README.md`, `llms.txt`, and `AGENTS.md` in the same change when behavior moves.
+- Update `README.md`, `llms.txt`, and `AGENTS.md` when behavior moves. Update `CONTRIBUTING.md` when the development or release process moves.
 - Pull request CI runs `npm run check` on `ubuntu-24.04` and `macos-15`, and `npm run check:portable` on `windows-2025` under an isolated `HOME`. The `workflow-lint` job runs pinned `actionlint` (configured by `.github/actionlint.yaml`) and `zizmor` (configured by `.github/zizmor.yml`) over `.github/`. Locally: `actionlint && uvx zizmor@1.32.0 .github`.
 - The `Host canary` workflow runs weekly (and on demand) against the newest omp and upstream pi releases. It does not gate PRs; a failure means a host release needs attention before Dependabot bumps the pins.
 - Never commit personal configs, session logs, `node_modules`, or temporary test files.
