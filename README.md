@@ -96,6 +96,8 @@ Verify what is active:
 /model-sync show
 ```
 
+For a first config, `/model-sync init` creates a starter preset from the current model. `/model-sync doctor` checks both layers for problems.
+
 Then spawn a subagent. For omp native spawns, the task card shows the routing note:
 
 ```text
@@ -146,7 +148,7 @@ A failed lookup, an unresolvable selector, or any error leaves the spawn untouch
 3. Split the input into call slots. A slot is only collected when it has an agent and no explicit model, and when the call is not a resume or management action.
 4. For each slot, find the profile, pick the selector, translate it into the plugin's selector dialect, and validate it.
 5. Write `model` into the slot, plus a split `thinking` field where the plugin expects one.
-6. Return `{ input }` and also mutate the input in place. The dual write covers both host mechanisms.
+6. Mutate the input in place. Upstream pi documents in-place mutation; omp passes the same object for non-edit tools. The extension does not return an `input` field, so another extension's last-wins input is not overwritten.
 
 An explicit per-call model always wins. Resume and management calls are left alone. The path never throws.
 
@@ -157,6 +159,19 @@ A nested spawn is resolved against the spawning session's current model, not the
 ### Unresolvable selectors
 
 When a selector cannot be resolved, that spawn or delegation is not intercepted. The host's default routing applies, and a one-time TUI warning appears. The warning set is bounded so long sessions stay lean. Under upstream pi, a glob is passed through because the child process resolves it.
+
+### Session controls
+
+These commands affect only the current session. They never write a config file, so switching a preset in one terminal does not change another terminal's routing.
+
+- `/model-sync use-session <preset|off>` routes this session with an existing preset from the active layer. `off` clears the override.
+- `/model-sync pause` stops routing for this session; `/model-sync resume` re-enables it. A session override survives a pause.
+- `/model-sync status [off]` prints the routing state and sets the status bar when the host has one. `status off` clears the bar.
+- `/model-sync log [clear]` prints the last 50 routing decisions for this session, including skipped selectors and their reasons.
+- `/model-sync doctor` scans the active and inactive layers, every preset, and every profile. It reports unknown keys, shadowed literal rules, selectors the host or installed plugins cannot resolve, and agent keys that differ only by case.
+- `/model-sync init` creates a starter named preset from the current model. It refuses to overwrite an existing file.
+
+Writes still target the on-disk active preset while a session override is active; the command tells you when that happens.
 
 ### Startup
 
@@ -177,7 +192,7 @@ A missing config file is not an error. `/model-sync list` and `/model-sync prese
 
 **An existing project file wholly replaces the global file.** There is no per-key merge. A broken-JSON project file still counts as "exists" and fails closed. Each layer carries its own `presets` and `activePreset`, so the two layers select presets independently.
 
-Writes target the global file by default. Any subcommand with `--project` targets the project file. When the project file exists and you write the global file without `--project`, the notification reminds you that the project layer overrides it.
+Writes target the global file by default. Any subcommand with `--project` targets the project file. When the project file exists and you write the global file without `--project`, the notification reminds you that the project layer overrides it. The write is atomic, follows a symlink to its target, and invalidates the read cache.
 
 ## Config schema
 
@@ -242,6 +257,7 @@ A legacy file behaves as a single virtual preset named `default` that is always 
   - a string: every agent under this profile uses that model;
   - an object: keys are agent names (for example `task`, `scout`, `Explore`); `"*"` is the profile default. An agent with neither an exact key nor a `"*"` default is left alone.
 - Selectors pass through to host resolution: `provider/id`, bare `id`, role aliases (for example `@smol`), and `:level` suffixes (for example `openai/gpt-6-luna:high`). Each plugin adapter decides which forms it can express; see [Subagent plugin support](#subagent-plugin-support).
+- `agentMatch` (optional): `"exact"` (default) or `"case-insensitive"`. Exact keys are always tried first; `"case-insensitive"` adds a case-insensitive pass before the `"*"` default. Use it when omp and a Claude-style plugin spell the same agent differently, for example `explore` and `Explore`.
 
 ### Active preset selection
 
@@ -269,7 +285,7 @@ The parse boundary never throws. These shapes are structural errors:
 
 An empty object is a valid empty legacy config. A missing file yields the same empty legacy config, which keeps writes downgrade-compatible.
 
-Invalid profile entries are skipped with a warning, not silently. This covers a non-string or blank `main`, a `subagents` value that is neither a non-blank string nor an object of non-blank strings, and object entries whose values are not non-blank strings. `list`, `show`, and `preset list` print the warnings. A write command warns that those entries will be dropped before it rewrites the file.
+Invalid profile entries are skipped with a warning, not silently. This covers a non-string or blank `main`, a `subagents` value that is neither a non-blank string nor an object of non-blank strings, and object entries whose values are not non-blank strings. `list`, `show`, and `preset list` print the warnings. Unknown root or profile keys are reported too. A write command warns that those entries will be dropped before it rewrites the file.
 
 ### Preset conversion and downgrade
 
@@ -291,6 +307,7 @@ Invalid profile entries are skipped with a warning, not silently. This covers a 
 - `main` with `*`: explicit glob wildcard. `*` crosses `/`, and all other regex metacharacters are escaped. The pattern is tested against both the `provider/id` and bare `id` forms.
 - There is no implicit substring matching. The **first** match in profile order wins.
 - Profile order matters. Use `/model-sync move <main> top|bottom|up|down` to put a rule before a broader glob or `*` rule.
+- Agent keys are exact by default. A profile with `"agentMatch": "case-insensitive"` tries an exact key, then a case-insensitive key, then `"*"`.
 
 ## Subagent plugin support
 
@@ -299,7 +316,7 @@ Invalid profile entries are skipped with a warning, not silently. This covers a 
 At `tool_call` time the extension identifies the plugin behind the call and injects a model only when that call has none.
 
 1. The tool name must be one of the adapter tool names (`subagent` or `Agent`).
-2. `pi.getAllTools()` is read once. Each adapter declares required and forbidden schema property names. The schema properties are collected recursively through `properties`, `items`, `anyOf`, `oneOf`, and `allOf`, up to a bounded depth.
+2. `pi.getAllTools()` is read once. Each adapter declares required and forbidden schema property names, including a `model` field. The schema properties are collected recursively through `properties`, `items`, `anyOf`, `oneOf`, and `allOf`, and through local `$ref` targets in `$defs` or `definitions`, up to a bounded depth.
 3. Adapters whose required properties are present and whose forbidden properties are absent become candidates. The call shape then picks the adapter that can actually inject into this input.
 4. A host without `getAllTools()`, or a schema that no longer matches, falls back to a stricter call-shape check. The fallback requires an adapter-specific marker property, so an ambiguous `{agent, task}` shape is not claimed.
 5. If more than one adapter still matches, the call is skipped with a one-time TUI warning. This is a setup problem, not a per-call guess.
@@ -334,7 +351,7 @@ Routing starts only after the host registers the plugin's tool. A plugin that fa
 - An explicit top-level `model`, `options.model`, or per-item `model` wins and is never overwritten.
 - A non-blank `action` is a management call and is skipped.
 - A `workflow` is a default-only seam. The profile `"*"` selector is injected as the top-level model, which becomes the workflow children's default. A child that names its own model keeps it. The script's internal agent names are not visible to `tool_call`.
-- The selector dialect accepts `provider/id` and `:level` suffixes. It does not accept `@alias` or glob. A bare id is accepted only when exactly one provider exposes it, or when the spawning session's provider is one of the candidates. On omp, `ctx.models.resolve()` is trusted; on upstream pi, the registry is counted.
+- The selector dialect accepts `provider/id` and `:level` suffixes. It does not accept `@alias` or glob. A bare id is accepted only when exactly one provider exposes it, or when the spawning session's provider is one of the candidates. On omp, the authenticated `ctx.models.list()` is counted; on upstream pi, the registry is counted. A slash-containing bare id is counted by its full id.
 
 ### `@tintinweb/pi-subagents` and `@gotgenes/pi-subagents`
 
@@ -365,9 +382,9 @@ Routing starts only after the host registers the plugin's tool. A plugin that fa
 
 - **An explicit per-call model always wins** and is never overwritten. This includes `options.model` on nicobailon, per-item models in `tasks[]` and `chain[]`, and child models in `children[]`.
 - **Resume and management calls are never given a model.** `action` (nicobailon), `resume` (`@tintinweb`, `@gotgenes`), and `resumeSessionId` (HazAT) are left untouched.
-- **Agent keys are case-sensitive.** The extension tries the exact key first, then `"*"`. Match the plugin's names (`Explore`, `Plan`, `general-purpose`, ...) exactly.
+- **Agent keys are case-sensitive by default.** The extension tries the exact key first, then `"*"`. Set `"agentMatch": "case-insensitive"` on the profile to add a case-insensitive pass before `"*"`.
 - An unresolvable selector, or one the adapter cannot express (`@alias`, glob, or a bare id where unsupported), is not injected. The plugin's default routing applies and a one-time TUI warning appears.
-- Under omp, selectors are validated with `ctx.models.resolve()`. Under upstream pi they are checked against `modelRegistry`: a leading `@` is unresolvable, a known `:level` suffix is stripped, a glob is passed through, and `provider/id` or a bare id is looked up. Comparisons are case-sensitive because the child resolves ids exactly.
+- Under omp, selectors are validated with `ctx.models.resolve()`. Under upstream pi they are checked against `modelRegistry`: a leading `@` is unresolvable, a known `:level` suffix is stripped, a glob is passed through, and `provider/id` or a bare id is looked up. A `provider/id` selector must also report configured auth through `hasConfiguredAuth()`. If the provider reading misses, the whole base is retried as a bare id, because model ids may contain `/`. Comparisons are case-sensitive because the child resolves ids exactly.
 - Calls that bypass `tool_call` are not intercepted. This includes workflow scripts (apart from the top-level default), agent mentions, `/subagent` commands, service APIs, and cross-extension RPC.
 
 ## `/model-sync` command
@@ -377,7 +394,7 @@ All command help, output, notifications, and config error messages are in Englis
 | Command | Description |
 |---|---|
 | `/model-sync` or `/model-sync list` | Show the active layer, active preset, and its profiles (plus the other layer when that file exists) |
-| `/model-sync show [model] [agent]` | Show the current or requested model, active preset, matched profile, and selector resolution status; with an agent, show only that binding |
+| `/model-sync show [model] [agent]` | Show the current or requested model, active preset, matched profile, and selector resolution status, including the installed plugin dialects that accept each selector |
 | `/model-sync add <main> <model>` | Add or update a profile in the active preset (all subagents use `<model>`) |
 | `/model-sync set <main> <agent> <model>` | Set a model for one agent in the active preset (`*` sets or updates the profile default while keeping per-agent entries) |
 | `/model-sync remove <main> [agent]` | Remove a whole profile or one agent entry from the active preset |
@@ -386,16 +403,23 @@ All command help, output, notifications, and config error messages are in Englis
 | `/model-sync preset create <name>` | Create an empty, inactive preset |
 | `/model-sync preset copy <source> <name>` | Deep-copy a preset into a new inactive preset (never overwrites) |
 | `/model-sync preset rename <old> <new>` | Rename a preset in place and keep its profiles |
-| `/model-sync preset use <name>` | Select the active preset (no-op when it is already active) |
+| `/model-sync preset use [name]` | Select the active preset (no-op when it is already active); with no name and a UI, show an interactive picker |
 | `/model-sync preset remove <name>` | Remove a preset; the active preset is refused |
+| `/model-sync status [off]` | Show session routing state and set the status bar; `off` clears it |
+| `/model-sync use-session <preset\|off>` | Route this session with an existing preset without writing the config; `off` clears it |
+| `/model-sync pause` | Pause routing for this session |
+| `/model-sync resume` | Resume routing for this session |
+| `/model-sync log [clear]` | Show or clear the last 50 routing decisions for this session |
+| `/model-sync doctor` | Scan both layers for unknown keys, shadowed rules, selector gaps, and case-only agent keys |
+| `/model-sync init` | Create a starter preset from the current model |
 | `/model-sync help` | Show the top-level usage |
 | `/model-sync preset help` | Show the preset usage |
 
-Commands reject extra arguments with a usage hint. A missing config file is not an error. `list` and `preset list` print the first-run hint, and the first write creates the file.
+Commands reject extra arguments and unknown `--` options with a usage hint. Single or double quotes keep a value with spaces together; preset names still cannot contain whitespace. A missing config file is not an error. `list` and `preset list` print the first-run hint, and the first write creates the file.
 
 `add`, `set`, `remove`, and `move` edit only the active preset of the target layer and refuse to write when no preset is active or the active name dangles. `preset create`, `preset copy`, and `preset rename` leave the active profile list unchanged; rename updates the active name when the old name was active. `preset list` always reports the active layer, so `--project` only affects writes for that command.
 
-Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add`, `set`, `remove`, and `move` complete existing profile `main` values and agent keys from the target layer's active preset. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Preset names are global by default; include `--project` before the name to complete project-layer names.
+`show` reports the host resolution and the installed plugin dialects that accept each selector. Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add`, `set`, `remove`, and `move` complete existing profile `main` values and agent keys from the target layer's active preset. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Completion also suggests authenticated model ids for `show`, `add`, and the model position of `set`, and suggests `off` or `clear` for `status` and `log`. Preset names are global by default; include `--project` before the name to complete project-layer names.
 
 ## Updating
 
@@ -417,8 +441,14 @@ That is the first-run state. Create a profile with `/model-sync add <main> <mode
 **Nothing is being intercepted.**
 Check `/model-sync show`. If it reports a config error, no active preset, or a dangling preset name, fix that first. If the profile matches but the selector is marked unresolvable, the host cannot resolve it; use a selector the host knows. For plugin calls, confirm the plugin's tool is registered in this session. A plugin that failed to load cannot be intercepted.
 
+**A session override or pause is active.**
+Run `/model-sync status`. `use-session` and `pause` affect only the current session and never write the config. Use `use-session off` or `resume` to clear them.
+
 **A plugin tool is not intercepted, but the config looks right.**
-The plugin may not expose a per-call `model` field, or the call may be a resume or management action. Calls that bypass `tool_call` (workflow scripts, agent mentions, `/subagent` commands, service APIs) are not intercepted. Also check that the agent key matches the plugin's name exactly; keys are case-sensitive.
+The plugin may not expose a per-call `model` field, or the call may be a resume or management action. Calls that bypass `tool_call` (workflow scripts, agent mentions, `/subagent` commands, service APIs) are not intercepted. Also check that the agent key matches the plugin's name exactly; keys are case-sensitive unless the profile sets `"agentMatch": "case-insensitive"`.
+
+**`show` says no plugin accepts a selector.**
+`show` lists the installed plugin dialects that can express each selector. Check the adapter rules below; an exact-only plugin rejects a bare id, and a Claude-style plugin rejects `@alias` and glob.
 
 **A real plugin fails to load on omp.**
 The plugin may need a TUI API that omp does not provide. `pi-subagents@0.88.1` needs `MouseRegion`, which omp 18.20.3 lacks. Check the plugin's own host requirements. The extension only sees tools that the host successfully registers.
@@ -448,13 +478,14 @@ npm run check
 It covers:
 
 - strict typechecking (`scripts/typecheck.mjs`, `scripts/tsconfig.typecheck.json`, `scripts/host-stub.d.ts`);
+- a compile-time contract probe against the installed omp and upstream pi type packages (`scripts/host-contract.ts`, `scripts/tsconfig.hosts.json`);
 - release version consistency;
 - release helper `node:test` suites;
 - the runtime load graph (`scripts/test-load-graph.ts`);
-- Bun behavioral suites (`test/portable.test.ts`, `test/adapters.test.ts`, `test/posix.test.ts`);
-- packed-tarball installation and isolated-home `omp` loading (`scripts/test-packed.mjs`).
+- Bun behavioral suites (`test/portable.test.ts`, `test/adapters.test.ts`, `test/commands.test.ts`, `test/features.test.ts`, `test/resolver.test.ts`, `test/posix.test.ts`);
+- packed-tarball installation, isolated-home `omp` loading, and upstream pi RPC execution of `/model-sync list` (`scripts/test-packed.mjs`).
 
-The adapter suite covers schema fingerprints, same-named tool separation, call-shape fallback, ambiguity handling, explicit-model and resume guards, selector dialects, and model injection. The portable suite covers config paths, parsing, projection, matching, the spawn and `tool_call` hooks, commands, and completions.
+The adapter suite covers schema fingerprints, same-named tool separation, call-shape fallback, ambiguity handling, explicit-model and resume guards, selector dialects, and model injection. The portable suite covers config paths, parsing, projection, matching, the spawn and `tool_call` hooks, commands, and completions. The command, feature, and resolver suites cover command guards, session overrides, pause and resume, status, route log, doctor, init, interactive preset use, completion, and selector resolution. `npm run test:unit` enforces a per-file coverage ratchet of 89% lines and 95% functions.
 
 Manual host verification is still useful for interactive UX. Load the extension with a throwaway config:
 
@@ -463,7 +494,7 @@ PI_MODEL_SYNC_CONFIG=/tmp/test.json omp --extension /path/to/pi-model-sync
 PI_MODEL_SYNC_CONFIG=/tmp/test.json pi --extension /path/to/pi-model-sync
 ```
 
-Then exercise `/model-sync add|set|list|show|remove|move`, the `preset` commands, completion, and a real subagent spawn. The plugin adapters have been exercised against the published schemas of all six supported plugins. A real `pi-subagents@0.88.1` child delegation was verified on upstream pi 1.5.2, including the routed child model.
+Then exercise `/model-sync add|set|list|show|remove|move`, the `preset` commands, `use-session`, `pause`, `resume`, `status`, `log`, `doctor`, `init`, completion, and a real subagent spawn. The plugin adapters have been exercised against the published schemas of all six supported plugins. A real `pi-subagents@0.88.1` child delegation was verified on upstream pi 1.5.2, including the routed child model.
 
 ## Contributing
 

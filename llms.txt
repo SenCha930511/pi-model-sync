@@ -1,6 +1,6 @@
 # pi-model-sync
 
-> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model. It covers omp-native subagents and the tools of supported third-party plugins (`@mjakl/pi-subagent`, `pi-subagents`, `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents`, `edxeth/pi-subagents`), detected from their registered tool schema. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command.
+> omp (oh my pi) / upstream pi extension: routes subagent models by the spawning session's current model. It covers omp-native subagents and the tools of supported third-party plugins (`@mjakl/pi-subagent`, `pi-subagents`, `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents`, `edxeth/pi-subagents`), detected from their registered tool schema. Profiles can be grouped into named presets (one active per config layer). Zero dependencies; the hosts load the TypeScript sources directly. Managed via the `/model-sync` command, including per-session preset overrides, pause and resume, a route log, `doctor`, and `init`.
 
 ## Install (pick the user's host)
 
@@ -9,7 +9,7 @@
 - git, tag-pinned (either host): `omp plugin install git:github.com/SenCha930511/pi-model-sync@v0.6.0` / `pi install git:github.com/SenCha930511/pi-model-sync@v0.6.0`
 - omp marketplace: `omp plugin marketplace add SenCha930511/omp-marketplace`, then `omp plugin install pi-model-sync@sencha930511`
 
-Verify after installing: start the host and run `/model-sync list`. It prints the active config layer, the active preset, and that preset's profiles. With no config file yet, it prints the first-run hint instead of an error.
+Verify after installing: start the host and run `/model-sync list`. It prints the active config layer, the active preset, and that preset's profiles. With no config file yet, `/model-sync init` creates a starter preset and `list` prints the first-run hint instead of an error.
 
 ## Minimal config
 
@@ -26,18 +26,19 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 }
 ```
 
-`activePreset` picks the preset whose profile list is in effect for that layer; a missing, empty, or null name routes nothing (fail closed, no fallback), and `preset use` repairs the selection. A typo-only root, a non-array `profiles` value, or a malformed preset value is a structural error; invalid profile entries are skipped with a warning. Legacy `{ "profiles": [...] }` files still work as a virtual `default` preset, and the first successful `preset create`/`preset copy` converts them. `main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key then `*` default; first matching profile in file order wins, and `/model-sync move` changes that order. An agent key with no `*` default is not intercepted. An explicit per-call `model` in a pi-subagent call is never overwritten.
+`activePreset` picks the preset whose profile list is in effect for that layer; a missing, empty, or null name routes nothing (fail closed, no fallback), and `preset use` repairs the selection. A typo-only root, a non-array `profiles` value, or a malformed preset value is a structural error; invalid profile entries are skipped with a warning. Legacy `{ "profiles": [...] }` files still work as a virtual `default` preset, and the first successful `preset create`/`preset copy` converts them. `main` matches the spawning session's model (`provider/id`, bare id, or `*` glob); per-agent selector via exact key, an optional case-insensitive pass when `agentMatch` is `"case-insensitive"`, then `*` default; first matching profile in file order wins, and `/model-sync move` changes that order. An agent key with no `*` default is not intercepted. An explicit per-call `model` in a pi-subagent call is never overwritten. Unknown root or profile keys are reported and dropped on the next write.
 
 ## Commands
 
 - `/model-sync [list]`, `/model-sync show [model] [agent]`, `/model-sync add <main> <model>`, `/model-sync set <main> <agent> <model>`, `/model-sync remove <main> [agent]`, `/model-sync move <main> <top|bottom|up|down>`
-- `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset rename <old> <new>`, `/model-sync preset use <name>`, `/model-sync preset remove <name>`
-- Writes target the global file; add `--project` to write the project file. When the project file exists, a global write warns that the project layer overrides it. `add`/`set`/`remove`/`move` edit only the active preset; `preset remove` refuses the active preset.
-- Typing the command shows argument completion for subcommands, profile `main` values and agent keys (`add`, `set`, `remove`, `move`), and existing preset names (`preset use`, `preset remove`, and the source of `preset copy`/`preset rename`). A typed `--project` flag is preserved and not suggested twice.
+- `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset rename <old> <new>`, `/model-sync preset use [name]`, `/model-sync preset remove <name>`
+- `/model-sync status [off]`, `/model-sync use-session <preset|off>`, `/model-sync pause`, `/model-sync resume`, `/model-sync log [clear]`, `/model-sync doctor`, `/model-sync init`
+- Writes target the global file; add `--project` to write the project file. When the project file exists, a global write warns that the project layer overrides it. `add`/`set`/`remove`/`move` edit only the active preset; `preset remove` refuses the active preset. Unknown `--` options are rejected, and quotes keep a value with spaces together.
+- Typing the command shows argument completion for subcommands, profile `main` values and agent keys (`add`, `set`, `remove`, `move`), existing preset names (`preset use`, `preset remove`, and the source of `preset copy`/`preset rename`), and authenticated model ids for `show`, `add`, and the model position of `set`. A typed `--project` flag is preserved and not suggested twice.
 
 ## Docs
 
-- [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, subagent plugin routing and support matrix, `/model-sync` commands, updating
+- [README](README.md): install variants, named-preset and legacy config schema, active-preset selection, matching rules, session controls, subagent plugin routing and support matrix, `/model-sync` commands, updating
 - [Changelog](https://github.com/SenCha930511/pi-model-sync/blob/main/CHANGELOG.md)
 - [CONTRIBUTING](https://github.com/SenCha930511/pi-model-sync/blob/main/CONTRIBUTING.md)
 - [License](LICENSE): MIT
