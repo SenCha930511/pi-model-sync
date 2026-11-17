@@ -70,14 +70,14 @@ function defaultGlobalPaths(): { home: string; ompGlobal: string; piGlobal: stri
 }
 
 /** Project layer probe: `.omp` wins when both files exist; `.pi` is the upstream-pi fallback. */
-function resolveProjectLayer(cwd: string): { path: string; stat: FileStat | undefined } {
+function resolveProjectLayer(cwd: string): { path: string; stat: FileStat | undefined; exists: boolean } {
   const ompPath = resolve(cwd, ".omp", "pi-model-sync.json");
-  const ompStat = statFile(ompPath);
-  if (ompStat) return { path: ompPath, stat: ompStat };
+  const omp = probeStat(ompPath);
+  if (omp.exists) return { path: ompPath, stat: omp.stat, exists: true };
   const piPath = resolve(cwd, ".pi", "pi-model-sync.json");
-  const piStat = statFile(piPath);
-  if (piStat) return { path: piPath, stat: piStat };
-  return { path: ompPath, stat: undefined };
+  const pi = probeStat(piPath);
+  if (pi.exists) return { path: piPath, stat: pi.stat, exists: true };
+  return { path: ompPath, stat: undefined, exists: false };
 }
 
 /** Resolve the global layer; stat is undefined for env overrides and null when the default path is known missing. */
@@ -98,10 +98,10 @@ function resolveGlobalLayer(cwd?: string): { path: string; stat: FileStat | null
     };
   }
   const { ompGlobal, piGlobal } = defaultGlobalPaths();
-  const ompStat = statFile(ompGlobal);
-  if (ompStat) return { path: ompGlobal, stat: ompStat };
-  const piStat = statFile(piGlobal);
-  if (piStat) return { path: piGlobal, stat: piStat };
+  const omp = probeStat(ompGlobal);
+  if (omp.exists) return { path: ompGlobal, stat: omp.stat };
+  const pi = probeStat(piGlobal);
+  if (pi.exists) return { path: piGlobal, stat: pi.stat };
   return { path: ompGlobal, stat: null };
 }
 
@@ -134,7 +134,7 @@ function resolveActiveLayerWithStat(cwd: string): {
   stat: FileStat | null | undefined;
 } {
   const project = resolveProjectLayer(cwd);
-  if (project.stat) return { path: project.path, layer: "project", stat: project.stat };
+  if (project.exists) return { path: project.path, layer: "project", stat: project.stat };
   const global = resolveGlobalLayer(cwd);
   return { path: global.path, layer: "global", stat: global.stat };
 }
@@ -150,14 +150,36 @@ interface FileStat {
   ino: number;
 }
 
-/** Stat a config path without throwing for a missing entry; other I/O errors stay quiet. */
+/** Stat a config path. undefined means the path cannot exist (missing entry, a
+ * non-directory component, or a non-file); any other stat error propagates so
+ * callers can fail closed instead of treating an unstatable file as absent. */
 function statFile(path: string): FileStat | undefined {
+  let stat: ReturnType<typeof statSync> | undefined;
   try {
-    const stat = statSync(path, { throwIfNoEntry: false });
-    if (!stat || !stat.isFile()) return undefined;
-    return { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size, ino: stat.ino };
+    stat = statSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    if (missingErrorCode(error)) return undefined;
+    throw error;
+  }
+  if (!stat || !stat.isFile()) return undefined;
+  return { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size, ino: stat.ino };
+}
+
+function missingErrorCode(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = (error as { code: unknown }).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** Probe layer existence. A stat error other than a missing path cannot prove
+ * absence, so the file counts as present (fail closed); the later read surfaces
+ * the real error instead of silently falling back to another layer. */
+function probeStat(path: string): { stat: FileStat | undefined; exists: boolean } {
+  try {
+    const stat = statFile(path);
+    return { stat, exists: stat !== undefined };
   } catch {
-    return undefined;
+    return { stat: undefined, exists: true };
   }
 }
 
