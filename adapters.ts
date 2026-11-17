@@ -42,7 +42,9 @@ export interface SubagentAdapter {
   id: string;
   label: string;
   toolNames: readonly string[];
+  /** Property paths (dot-joined from the schema root) that must all be present. */
   requiredProps: readonly string[];
+  /** Property names that disqualify the fingerprint at any depth. */
   forbiddenProps: readonly string[];
   /** Without a schema, at least one of these must be present to claim the call. */
   fallbackProps: readonly string[];
@@ -172,7 +174,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "mjakl",
     label: "@mjakl/pi-subagent",
     toolNames: ["subagent"],
-    requiredProps: ["calls", "model"],
+    requiredProps: ["calls", "calls.model"],
     forbiddenProps: ["subagent_type", "workflow", "name", "children", "tasks", "chain"],
     fallbackProps: ["calls"],
     // Unchanged legacy behavior: the selector is passed through verbatim and the host
@@ -261,40 +263,39 @@ function collectSchemaProps(
   into: Set<string>,
   depth: number,
   root?: Record<string, unknown>,
+  prefix = "",
 ): void {
   if (!isRecord(schema) || depth > 8) return;
   const document = root ?? schema;
   const ref = schema.$ref;
   if (typeof ref === "string") {
+    // A $ref expands its target at the referencing position, so a wrapped object's
+    // properties stay nested while a zod-style property ref stays top-level.
     const target = resolveSchemaRef(ref, document);
-    if (target) collectSchemaProps(target, into, depth + 1, document);
+    if (target) collectSchemaProps(target, into, depth + 1, document, prefix);
   }
   const properties = schema.properties;
   if (isRecord(properties)) {
     for (const [key, value] of Object.entries(properties)) {
-      into.add(key);
-      collectSchemaProps(value, into, depth + 1, document);
+      const path = prefix ? `${prefix}.${key}` : key;
+      into.add(path);
+      collectSchemaProps(value, into, depth + 1, document, path);
     }
   }
+  // Array items and union branches belong to their property, not a new path segment.
   const items = schema.items;
-  if (isRecord(items)) collectSchemaProps(items, into, depth + 1, document);
+  if (isRecord(items)) collectSchemaProps(items, into, depth + 1, document, prefix);
   else if (Array.isArray(items)) {
-    for (const item of items) collectSchemaProps(item, into, depth + 1, document);
+    for (const item of items) collectSchemaProps(item, into, depth + 1, document, prefix);
   }
   for (const key of ["anyOf", "oneOf", "allOf"]) {
     const branches = schema[key];
     if (Array.isArray(branches)) {
-      for (const branch of branches) collectSchemaProps(branch, into, depth + 1, document);
+      for (const branch of branches) collectSchemaProps(branch, into, depth + 1, document, prefix);
     }
   }
-  for (const key of ["$defs", "definitions"]) {
-    const definitions = schema[key];
-    if (isRecord(definitions)) {
-      for (const definition of Object.values(definitions)) {
-        collectSchemaProps(definition, into, depth + 1, document);
-      }
-    }
-  }
+  // $defs/$definitions are intentionally not walked here: an unreferenced
+  // definition must not satisfy a required path (decision: fingerprints are paths).
 }
 
 export function schemaProps(info: ToolInfoLike): Set<string> {
@@ -303,12 +304,22 @@ export function schemaProps(info: ToolInfoLike): Set<string> {
   return props;
 }
 
+/** A forbidden name disqualifies at any depth (last path segment). */
+function mentionsProp(props: ReadonlySet<string>, name: string): boolean {
+  if (props.has(name)) return true;
+  for (const path of props) {
+    if (path.endsWith(`.${name}`)) return true;
+  }
+  return false;
+}
+
 export function matchesSchema(adapter: SubagentAdapter, props: ReadonlySet<string>): boolean {
   return (
     adapter.requiredProps.every((prop) => props.has(prop)) &&
-    !adapter.forbiddenProps.some((prop) => props.has(prop))
+    !adapter.forbiddenProps.some((prop) => mentionsProp(props, prop))
   );
 }
+
 
 export function selectAdapter(
   toolName: string,
