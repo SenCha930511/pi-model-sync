@@ -20,7 +20,12 @@
   "files": [
     "./host-stub.d.ts",
     "../adapters.ts",
+    "../commands.ts",
+    "../completions.ts",
     "../config.ts",
+    "../hooks.ts",
+    "../resolver.ts",
+    "../session.ts",
     "../index.ts"
   ]
 }

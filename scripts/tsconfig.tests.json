@@ -6,8 +6,12 @@
   "files": [
     "./host-stub.d.ts",
     "./test-load-graph.ts",
+    "../test/harness.ts",
     "../test/portable.test.ts",
     "../test/adapters.test.ts",
+    "../test/commands.test.ts",
+    "../test/features.test.ts",
+    "../test/resolver.test.ts",
     "../test/posix.test.ts"
   ]
 }
