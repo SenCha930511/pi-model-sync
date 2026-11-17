@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 — 2026-11-17
+
+- Add per-session routing controls: `use-session`, `pause`, `resume`, `status`, `log`, `doctor`, and `init`.
+- Add `agentMatch: "case-insensitive"`, dialect-aware `show`, and model-aware completion for `add`, `show`, and `set`.
+- Split the extension into `resolver.ts`, `session.ts`, `hooks.ts`, `completions.ts`, and `commands.ts`; `index.ts` is registration only.
+- Harden selector resolution for slash-containing bare ids, upstream configured-auth checks, omp bare-id uniqueness, and multi-pattern explicit models.
+- Write `tool_call` input once in place, follow symlinks on config writes, warn on unknown keys, and keep warning dedupe per session.
+- Add the installed-host contract probe, packed upstream pi RPC command execution, and a per-file coverage ratchet.
+- Fix status-bar layer and revival, `add`/`show` completion, requested-provider plugin checks, doctor glob and layer diagnostics, corrupt `init` files, route-log gaps, and `getAll()`-only auth filtering.
 ## 0.6.0 — 2026-11-16
 
 - Route subagent models for `pi-subagents` (nicobailon), `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`, `pi-interactive-subagents` (HazAT), and `edxeth/pi-subagents` alongside `@mjakl/pi-subagent`.
