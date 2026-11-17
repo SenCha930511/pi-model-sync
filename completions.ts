@@ -5,6 +5,7 @@
  */
 
 import {
+  findProfile,
   getGlobalConfigPath,
   getProjectConfigPath,
   isNamedConfig,
@@ -14,6 +15,8 @@ import {
   resolveActiveLayer,
   summarizeSubagents,
 } from "./config";
+import { parseSelector, selectorRefs } from "./resolver";
+import { sessionSelection } from "./session";
 import type { SessionState } from "./session";
 
 export interface ArgumentCompletion {
@@ -65,14 +68,65 @@ interface CompletionContext {
   useProject: boolean;
 }
 
-function parseCompletionContext(argumentPrefix: string): CompletionContext {
-  const tokens = argumentPrefix.trim().split(/\s+/).filter((token) => token.length > 0);
+interface CompletionToken {
+  value: string;
+  start: number;
+  quoted: boolean;
+}
+
+function tokenizeCompletion(input: string): CompletionToken[] | null {
+  const tokens: CompletionToken[] = [];
+  let current = "";
+  let start = -1;
+  let quote: "'" | '"' | null = null;
+  let quoted = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]!;
+    if (quote !== null) {
+      if (char === quote) {
+        quote = null;
+        quoted = true;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      if (start < 0) start = index;
+      quote = char;
+      quoted = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (start >= 0) {
+        tokens.push({ value: current, start, quoted });
+        current = "";
+        start = -1;
+        quoted = false;
+      }
+      continue;
+    }
+    if (start < 0) start = index;
+    current += char;
+  }
+  if (quote !== null) return null;
+  if (start >= 0) tokens.push({ value: current, start, quoted });
+  return tokens;
+}
+
+function parseCompletionContext(argumentPrefix: string): CompletionContext | null {
+  const tokens = tokenizeCompletion(argumentPrefix);
+  if (!tokens) return null;
   const hasTrailingSpace = /\s$/.test(argumentPrefix);
-  const current = hasTrailingSpace ? "" : tokens.pop() ?? "";
-  const projectFlagInTokens = tokens.includes("--project");
+  const last = tokens[tokens.length - 1];
+  const current = hasTrailingSpace ? "" : last?.value ?? "";
+  if (!hasTrailingSpace && last) tokens.pop();
+  const projectFlagInTokens = tokens.some((token) => !token.quoted && token.value === "--project");
   const useProject = projectFlagInTokens || current === "--project";
-  const commandTokens = tokens.filter((token) => token !== "--project");
-  const beforeCurrent = argumentPrefix.slice(0, argumentPrefix.length - current.length);
+  const commandTokens = tokens
+    .filter((token) => token.quoted || token.value !== "--project")
+    .map((token) => token.value);
+  const beforeCurrent = hasTrailingSpace ? argumentPrefix : last ? argumentPrefix.slice(0, last.start) : argumentPrefix;
   return { current, beforeCurrent, commandTokens, projectFlagInTokens, useProject };
 }
 
@@ -152,17 +206,34 @@ function modelCompletionItems(
   baseTokens: string[],
   context: CompletionContext,
   state: SessionState,
+  trailing = false,
 ): ArgumentCompletion[] | null {
   if (state.availableModels.length === 0) return null;
   const base = baseTokens.join(" ");
+  const needle = prefix.toLowerCase();
   const items = state.availableModels
-    .filter((id) => id.startsWith(prefix))
+    .filter((id) => id.toLowerCase().startsWith(needle))
     .slice(0, 30)
     .map((id) => ({
-      value: withProject(`${base} ${id}`, context),
+      value: withProject(`${base} ${id}${trailing ? " " : ""}`, context),
       label: id,
       description: "available model",
     }));
+  return items.length > 0 ? items : null;
+}
+
+function mergeCompletions(
+  ...lists: Array<ArgumentCompletion[] | null>
+): ArgumentCompletion[] | null {
+  const items: ArgumentCompletion[] = [];
+  const labels = new Set<string>();
+  for (const list of lists) {
+    for (const item of list ?? []) {
+      if (labels.has(item.label)) continue;
+      labels.add(item.label);
+      items.push(item);
+    }
+  }
   return items.length > 0 ? items : null;
 }
 
@@ -221,6 +292,42 @@ function profileCompletionItems(
   return null;
 }
 
+function showAgentCompletionItems(
+  rest: string[],
+  current: string,
+  context: CompletionContext,
+  state: SessionState,
+): ArgumentCompletion[] | null {
+  const modelArg = rest[0];
+  if (!modelArg) return null;
+  const parsed = parseSelector(modelArg);
+  if (!parsed || parsed.kind !== "reference") return null;
+  const layer = readLayer(resolveActiveLayer(state.cwd ?? process.cwd()).path);
+  if (!layer.exists || layer.error) return null;
+  const effective = projectActiveProfiles(layer.config, sessionSelection(state));
+  if (effective.warning || !effective.activePreset) return null;
+  const profile = selectorRefs(parsed)
+    .map((ref) => findProfile(effective, ref))
+    .find((hit) => hit !== undefined);
+  if (!profile) return null;
+  const subagents = profile.subagents;
+  const agents = typeof subagents === "string" ? ["*"] : Object.keys(subagents);
+  const prefix = current.toLowerCase();
+  const items = agents
+    .filter((agent) => agent.toLowerCase().startsWith(prefix))
+    .map((agent) => ({
+      value: withProject(`show ${modelArg} ${agent}`, context),
+      label: agent,
+      description:
+        typeof subagents === "string"
+          ? `profile default → ${subagents}`
+          : agent === "*"
+            ? `profile default → ${subagents["*"] ?? ""}`
+            : `→ ${subagents[agent] ?? ""}`,
+    }));
+  return items.length > 0 ? items : null;
+}
+
 /** Never throws; returns null when the prefix is unknown or malformed. */
 export function modelSyncArgumentCompletions(
   argumentPrefix: string,
@@ -228,6 +335,7 @@ export function modelSyncArgumentCompletions(
 ): ArgumentCompletion[] | null {
   try {
     const context = parseCompletionContext(argumentPrefix);
+    if (!context) return null;
     const { current, beforeCurrent, commandTokens, projectFlagInTokens } = context;
     if (current.startsWith("-")) {
       if (projectFlagInTokens || !"--project".startsWith(current)) return null;
@@ -269,11 +377,18 @@ export function modelSyncArgumentCompletions(
         : null;
     }
     if (sub === "show") {
-      if (rest.length > 0) return null;
-      return modelCompletionItems(current, commandTokens, context, state);
+      if (rest.length === 0) return modelCompletionItems(current, commandTokens, context, state);
+      if (rest.length === 1) return showAgentCompletionItems(rest, current, context, state);
+      return null;
     }
     if (sub === "add") {
       if (rest.length > 1) return null;
+      if (rest.length === 0) {
+        return mergeCompletions(
+          profileCompletionItems(sub, rest, current, context, state),
+          modelCompletionItems(current, commandTokens, context, state, true),
+        );
+      }
       return modelCompletionItems(current, commandTokens, context, state);
     }
     if (sub === "set") {

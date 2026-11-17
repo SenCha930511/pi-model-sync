@@ -31,11 +31,27 @@ Run date: 2026-11-17. Branch: `feat/routing-hardening`.
 | Session commands | `use-session`, `pause`, `resume`, `status`, `log`, `doctor`, and `init` are implemented; none of the session controls writes. | `test/features.test.ts` session, doctor, and init groups |
 | Host contract | `scripts/host-contract.ts` compiles against the installed omp and upstream pi types. | `npm run typecheck` |
 | Packed integration | The packed tarball loads in omp and executes `/model-sync list` in upstream pi RPC against an isolated config. | `npm run test:packed` |
-| Coverage | 104 unit tests plus 3 POSIX tests; 95.58% lines, 99.21% functions; per-file ratchet set to 88% lines and 95% functions. | `npm run test:unit`, `npm run test:posix` |
+| Coverage | 113 unit tests plus 3 POSIX tests; 95.99% lines, 99.33% functions; per-file ratchet set to 88% lines and 95% functions. | `npm run test:unit`, `npm run test:posix` |
+
+## Follow-up fixes
+
+| Issue | Fix | Evidence |
+|---|---|---|
+| Status bar | `saveConfig` reads the active layer; session commands update only an enabled bar. | `test/features.test.ts` "keeps the status bar on the active layer when writing the global file", "does not revive a closed status bar from session commands" |
+| `add` completion | The first argument merges profile mains with model ids; model matching is case-insensitive; quotes are tokenized once. | `test/features.test.ts` "add completion includes existing profile mains and case-insensitive model ids", "add completion still offers profile mains when the host lists no models" |
+| `show` completion | After a model, complete the matched profile's agent keys. | `test/features.test.ts` "show completes the agent argument from the matched profile" |
+| `show` provider | Plugin checks receive the requested model's provider. | `test/commands.test.ts` "show uses the requested model's provider for plugin checks" |
+| Doctor | Glob shadow probes, layer labels, and plugin wording; `init` reports a corrupt file. | `test/features.test.ts` "doctor labels layers and reports glob shadowing"; the init test |
+| Route log | Paused tool calls log slot agents; no-profile and no-selector skips are recorded. | `test/features.test.ts` "route log records tool agents and every skip reason" |
+| Registry auth | The `getAll()` fallback is filtered through `hasConfiguredAuth()`. | `test/resolver.test.ts` "filters getAll-only registries through hasConfiguredAuth" |
 
 ## Open items
 
 - Thinking-level inheritance from the spawning session is not implemented. The selector dialect still treats `:level` as static. A future change needs a host thinking-level source and a decision for suffix dialects.
 - `invocationKind`-specific routing (`task` vs `eval`) is not implemented. The spawn hook reads `invocationKind` only to identify explicit per-call models.
 - No `CHANGELOG.md` entry was added because `scripts/check-release-versions.mjs` requires the first `##` heading to match the package version; this branch does not bump the version.
+- omp does not expose `perCallModel` on the spawn event. An explicit per-call model identical to the current model is indistinguishable from a normal spawn, so the guard routes it.
+- An agent frontmatter model with no `modelRole` is indistinguishable from an explicit per-call model, so the guard skips routing it.
+- Completion values are not re-quoted when a stored profile or agent name contains whitespace; accepting such a completion can add extra arguments.
+- The doctor glob probe covers fully shadowed globs. Partial overlaps can go unreported.
 - Interactive TUI behavior was exercised through the host harness and the packed RPC probe, not through a live terminal session. The manual checklist in `AGENTS.md` covers the remaining visual checks.

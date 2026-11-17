@@ -117,7 +117,16 @@ export function handleBeforeSubagentSpawn(
       return undefined;
     }
     const selector = pickSubagentSelector(profile, agentName);
-    if (!selector) return undefined;
+    if (!selector) {
+      recordRoute(state, {
+        at: Date.now(),
+        path: "spawn",
+        agent: agentName,
+        main: profile.main,
+        outcome: "skipped: no selector for agent",
+      });
+      return undefined;
+    }
     const ok = selectorResolvable(ctx, selector);
     if (ok === false) {
       warnUnresolvableOnce(ctx, state, selector, "using default routing for this spawn");
@@ -180,25 +189,49 @@ export function handleToolCall(
     const modelRef = currentModelRef(ctx);
     if (!modelRef) return;
     if (state.paused) {
-      recordRoute(state, {
-        at: Date.now(),
-        path: "tool",
-        agent: "*",
-        main: formatModelRef(modelRef),
-        adapter: selection.adapter.id,
-        outcome: "skipped: session paused",
-      });
+      for (const slot of selection.slots) {
+        recordRoute(state, {
+          at: Date.now(),
+          path: "tool",
+          agent: slot.agentName,
+          main: formatModelRef(modelRef),
+          adapter: selection.adapter.id,
+          outcome: "skipped: session paused",
+        });
+      }
       return;
     }
     const profile = findProfile(readConfig(ctx.cwd, sessionSelection(state)), modelRef);
-    if (!profile) return;
+    if (!profile) {
+      for (const slot of selection.slots) {
+        recordRoute(state, {
+          at: Date.now(),
+          path: "tool",
+          agent: slot.agentName,
+          main: formatModelRef(modelRef),
+          adapter: selection.adapter.id,
+          outcome: "skipped: no matching profile",
+        });
+      }
+      return;
+    }
     // Per-event memo (dynamic insert → Map): a batch often repeats the same agent or
     // "*" default; validate each unique selector once (registry scans are not free upstream).
     const resolutionCache = new Map<string, boolean | undefined>();
     let registrySnapshot: RegistrySnapshot | undefined;
     for (const slot of selection.slots) {
       const selector = pickSubagentSelector(profile, slot.agentName);
-      if (!selector) continue;
+      if (!selector) {
+        recordRoute(state, {
+          at: Date.now(),
+          path: "tool",
+          agent: slot.agentName,
+          main: profile.main,
+          adapter: selection.adapter.id,
+          outcome: "skipped: no selector for agent",
+        });
+        continue;
+      }
       const spec = normalizeSelector(selector, selection.adapter.dialect);
       if (!spec) {
         warnUnresolvableOnce(

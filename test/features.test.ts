@@ -64,6 +64,16 @@ const EDXETH_SCHEMA = {
   },
 };
 
+const NICOBAILON_SCHEMA = {
+  name: "subagent",
+  parameters: {
+    type: "object",
+    properties: Object.fromEntries(
+      ["agent", "task", "workflow", "action", "options", "model"].map((prop) => [prop, { type: "string" }]),
+    ),
+  },
+};
+
 describe("session routing controls", () => {
   test("use-session routes in memory without rewriting the file", async () => {
     const host = createHostHarness();
@@ -160,6 +170,49 @@ describe("session routing controls", () => {
     expect(statuses.at(-1)?.text).toBeUndefined();
   });
 
+  test("keeps the status bar on the active layer when writing the global file", async () => {
+    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const host = createHostHarness({ setStatus: (key, text) => statuses.push({ key, text }) });
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      activePreset: "global",
+      presets: {
+        global: [{ main: "*", subagents: "openai/global" }],
+        other: [{ main: "*", subagents: "openai/other" }],
+      },
+    });
+    writeConfig(getProjectConfigPath(cwd), {
+      activePreset: "project",
+      presets: { project: [{ main: "*", subagents: "openai/project" }] },
+    });
+    const ctx = modelCtx(cwd);
+    await host.runCommand("status", ctx);
+    expect(statuses.at(-1)?.text).toBe("active: project");
+    await host.runCommand("preset use other", ctx);
+    expect(statuses.at(-1)?.text).toBe("active: project");
+  });
+
+  test("does not revive a closed status bar from session commands", async () => {
+    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const host = createHostHarness({ setStatus: (key, text) => statuses.push({ key, text }) });
+    const cwd = makeTempDir();
+    writeGlobal(cwd, { profiles: [{ main: "*", subagents: "openai/mini" }] });
+    const ctx = modelCtx(cwd);
+
+    await host.runCommand("pause", ctx);
+    await host.runCommand("resume", ctx);
+    await host.runCommand("use-session off", ctx);
+    expect(statuses).toHaveLength(0);
+
+    await host.runCommand("status", ctx);
+    expect(statuses.at(-1)?.text).toBe("active: default");
+    await host.runCommand("status off", ctx);
+    const before = statuses.length;
+    await host.runCommand("pause", ctx);
+    await host.runCommand("resume", ctx);
+    expect(statuses).toHaveLength(before);
+  });
+
   test("route log records routed and skipped decisions, then clears", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();
@@ -179,6 +232,42 @@ describe("session routing controls", () => {
     await host.runCommand("log clear", ctx);
     const empty = await host.runCommand("log", ctx);
     expect(empty[0]?.message).toContain("No routing decisions recorded");
+  });
+
+  test("route log records tool agents and every skip reason", async () => {
+    const host = createHostHarness({ tools: [NICOBAILON_SCHEMA] });
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      profiles: [
+        { main: "openai/gpt-6", subagents: { scout: "openai/mini" } },
+        { main: "anthropic/claude-4", subagents: { scout: "openai/other" } },
+      ],
+    });
+    const ctx = modelCtx(cwd);
+    await host.runCommand("pause", ctx);
+    host.emitToolCall({ toolName: "subagent", input: { agent: "scout" } }, ctx);
+    let log = await host.runCommand("log", ctx);
+    expect(log[0]?.message).toContain("tool scout");
+    expect(log[0]?.message).not.toContain("tool *");
+
+    await host.runCommand("resume", ctx);
+    const noProfileCtx = {
+      ...ctx,
+      models: { current: () => ({ provider: "google", id: "gpt-6" }), resolve: () => true },
+    };
+    host.emitToolCall({ toolName: "subagent", input: { agent: "scout" } }, noProfileCtx);
+    log = await host.runCommand("log", ctx);
+    expect(log[0]?.message).toContain("skipped: no matching profile");
+
+    const noSelectorCwd = makeTempDir();
+    writeGlobal(noSelectorCwd, {
+      profiles: [{ main: "openai/gpt-6", subagents: { other: "openai/mini" } }],
+    });
+    const noSelectorCtx = modelCtx(noSelectorCwd);
+    host.emitSpawn({ agent: "scout" }, noSelectorCtx);
+    host.emitToolCall({ toolName: "subagent", input: { agent: "scout" } }, noSelectorCtx);
+    log = await host.runCommand("log", noSelectorCtx);
+    expect(log[0]?.message).toContain("skipped: no selector for agent");
   });
 
   test("warnings are per session instead of process-global", () => {
@@ -223,7 +312,7 @@ describe("doctor and init", () => {
     const doctor = await host.runCommand("doctor", modelCtx(cwd));
     expect(doctor[0]?.message).toContain("shadowed by earlier profile");
     expect(doctor[0]?.message).toContain("differ only by case");
-    expect(doctor[0]?.message).toContain("not accepted by any installed plugin");
+    expect(doctor[0]?.message).toContain("not accepted by any installed plugin for tool calls");
 
     const unknownCwd = makeTempDir();
     writeFileSync(
@@ -232,6 +321,27 @@ describe("doctor and init", () => {
     );
     const unknown = await host.runCommand("doctor", modelCtx(unknownCwd));
     expect(unknown[0]?.message).toContain('Ignored unknown config key "active_preset"');
+  });
+
+  test("doctor labels layers and reports glob shadowing", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      profiles: [
+        { main: "anthropic/*", subagents: "openai/a" },
+        { main: "anthropic/claude-*", subagents: "openai/b" },
+      ],
+    });
+    writeConfig(getProjectConfigPath(cwd), {
+      profiles: [
+        { main: "*", subagents: "openai/a" },
+        { main: "openai/gpt-6", subagents: "openai/b" },
+      ],
+    });
+    const doctor = await host.runCommand("doctor", modelCtx(cwd));
+    expect(doctor[0]?.message).toContain("may be shadowed by earlier profile");
+    expect(doctor[0]?.message).toContain("[global]");
+    expect(doctor[0]?.message).toContain("[project]");
   });
 
   test("doctor reports a clean config", async () => {
@@ -266,6 +376,14 @@ describe("doctor and init", () => {
     const projectCreated = await host.runCommand("init --project", modelCtx(projectOnly));
     expect(projectCreated[0]?.message).toContain("Created starter config");
     expect(readLayer(getProjectConfigPath(projectOnly)).exists).toBe(true);
+
+    const brokenCwd = makeTempDir();
+    const brokenTarget = getGlobalConfigPath(brokenCwd);
+    writeFileSync(brokenTarget, "{ broken");
+    const broken = await host.runCommand("init", modelCtx(brokenCwd));
+    expect(broken[0]?.level).toBe("error");
+    expect(broken[0]?.message).toContain("cannot be parsed");
+    expect(readFileSync(brokenTarget, "utf8")).toBe("{ broken");
 
     const noModelCwd = makeTempDir();
     process.env.PI_MODEL_SYNC_CONFIG = "sync.json";
@@ -315,7 +433,7 @@ describe("completion", () => {
       "preset copy default ",
     );
     expect(complete("--project add ")?.find((item) => item.label === "openai/gpt-6")?.value).toBe(
-      "add openai/gpt-6 --project",
+      "add openai/gpt-6 --project ",
     );
     expect(complete("--project --")).toBeNull();
     expect(complete("set ")?.some((item) => item.label === "openai/gpt-6")).toBe(true);
@@ -365,6 +483,60 @@ describe("completion", () => {
     const complete = host.command().getArgumentCompletions!;
     expect(complete("use-session ")?.some((item) => item.label === "project")).toBe(true);
     expect(complete("use-session ")?.some((item) => item.label === "default")).toBe(false);
+  });
+
+  test("add completion includes existing profile mains and case-insensitive model ids", () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      profiles: [
+        { main: "anthropic/*", subagents: "openai/fallback" },
+        { main: "openai/gpt-6", subagents: "openai/mini" },
+      ],
+    });
+    const ctx = modelCtx(cwd, {
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+        list: () => [{ provider: "meta-llama", id: "Llama-3.3-70B-Instruct" }],
+      },
+    });
+    host.emitSessionStart(ctx);
+    const complete = host.command().getArgumentCompletions!;
+    expect(complete("add ")?.some((item) => item.label === "anthropic/*")).toBe(true);
+    expect(complete("add llama")?.some((item) => item.label === "Llama-3.3-70B-Instruct")).toBe(true);
+    expect(complete('add "anthropic/*"')?.some((item) => item.label === "anthropic/*")).toBe(true);
+    expect(complete('add "anthropic')).toBeNull();
+  });
+
+  test("add completion still offers profile mains when the host lists no models", () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      profiles: [{ main: "anthropic/*", subagents: "openai/fallback" }],
+    });
+    const ctx = modelCtx(cwd, {
+      models: { current: () => ({ provider: "openai", id: "gpt-6" }), resolve: () => true, list: () => [] },
+    });
+    host.emitSessionStart(ctx);
+    const complete = host.command().getArgumentCompletions!;
+    expect(complete("add ")?.some((item) => item.label === "anthropic/*")).toBe(true);
+  });
+
+  test("show completes the agent argument from the matched profile", () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      profiles: [{ main: "openai/gpt-6", subagents: { explore: "openai/mini", "*": "openai/luna" } }],
+    });
+    const ctx = modelCtx(cwd, {
+      models: { current: () => ({ provider: "openai", id: "gpt-6" }), resolve: () => true, list: () => [] },
+    });
+    host.emitSessionStart(ctx);
+    const complete = host.command().getArgumentCompletions!;
+    const agents = complete("show openai/gpt-6 ");
+    expect(agents?.some((item) => item.label === "explore")).toBe(true);
+    expect(agents?.some((item) => item.label === "*")).toBe(true);
   });
 
   test("uses the cached session cwd and refreshes the model list on model_select", async () => {

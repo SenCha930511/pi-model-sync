@@ -166,10 +166,10 @@ These commands affect only the current session. They never write a config file, 
 
 - `/model-sync use-session <preset|off>` routes this session with an existing preset from the active layer. `off` clears the override.
 - `/model-sync pause` stops routing for this session; `/model-sync resume` re-enables it. A session override survives a pause.
-- `/model-sync status [off]` prints the routing state and sets the status bar when the host has one. `status off` clears the bar.
+- `/model-sync status [off]` prints the routing state and sets the status bar when the host has one. `status off` clears the bar. Other session commands update the bar only while it is enabled.
 - `/model-sync log [clear]` prints the last 50 routing decisions for this session, including skipped selectors and their reasons.
-- `/model-sync doctor` scans the active and inactive layers, every preset, and every profile. It reports unknown keys, shadowed literal rules, selectors the host or installed plugins cannot resolve, and agent keys that differ only by case.
-- `/model-sync init` creates a starter named preset from the current model. It refuses to overwrite an existing file.
+- `/model-sync doctor` scans the active and inactive layers, every preset, and every profile. It reports unknown keys, shadowed literal and glob rules with the layer named, selectors the host or installed plugins cannot resolve, and agent keys that differ only by case.
+- `/model-sync init` creates a starter named preset from the current model. It refuses to overwrite an existing file and reports a corrupt one instead of overwriting it.
 
 Writes still target the on-disk active preset while a session override is active; the command tells you when that happens.
 
@@ -372,7 +372,7 @@ Routing starts only after the host registers the plugin's tool. A plugin that fa
 ### `edxeth/pi-subagents`
 
 - Input: a single `{ name, task, title, agent?, model? }` call, or a `children[]` batch.
-- A non-empty `children[]` collects one slot per child with an `agent` and no `model`. An empty `children[]` is treated as a single spawn.
+- A non-empty `children[]` collects one slot per child with no `model`; a missing `agent` falls back to `"*"`. An empty `children[]` is treated as a single spawn.
 - An explicit top-level or per-child `model` wins and is never overwritten.
 - The agent key is `agent`, otherwise `"*"`.
 - Only exact `provider/id` selectors are accepted. A bare id, `@alias`, or glob is skipped rather than guessed, because the wrong provider would be worse than default routing. A known `:level` suffix is split into `thinking`.
@@ -419,7 +419,7 @@ Commands reject extra arguments and unknown `--` options with a usage hint. Sing
 
 `add`, `set`, `remove`, and `move` edit only the active preset of the target layer and refuse to write when no preset is active or the active name dangles. `preset create`, `preset copy`, and `preset rename` leave the active profile list unchanged; rename updates the active name when the old name was active. `preset list` always reports the active layer, so `--project` only affects writes for that command.
 
-`show` reports the host resolution and the installed plugin dialects that accept each selector. Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add`, `set`, `remove`, and `move` complete existing profile `main` values and agent keys from the target layer's active preset. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Completion also suggests authenticated model ids for `show`, `add`, and the model position of `set`, and suggests `off` or `clear` for `status` and `log`. Preset names are global by default; include `--project` before the name to complete project-layer names.
+`show` reports the host resolution and the installed plugin dialects that accept each selector. Typing `/model-sync ` or `/model-sync preset ` opens argument completion with descriptions for each subcommand. A typed `--project` flag is preserved in the completion value and is not suggested twice. `add` completes existing profile `main` values and authenticated model ids for the first argument, and model ids for the second. `set`, `remove`, and `move` complete existing profile `main` values and agent keys from the target layer's active preset. `show` completes the model and, after a model, the agent keys from the matched profile. `preset use`, `preset remove`, `preset copy`, and `preset rename` suggest existing preset names from the target config layer. Completion also suggests `off` or `clear` for `status` and `log`. Preset names are global by default; include `--project` before the name to complete project-layer names.
 
 ## Updating
 

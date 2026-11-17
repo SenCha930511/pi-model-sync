@@ -197,18 +197,25 @@ export function createRegistrySnapshot(): RegistrySnapshot {
   return { entries: null, resolved: new Map() };
 }
 
-/** One registry listing per snapshot: getAvailable() wins, getAll() is the fallback. */
+/** One registry listing per snapshot. getAvailable() is already authenticated; the
+ * getAll() fallback is filtered through hasConfiguredAuth() so every consumer sees the
+ * same set. */
 export function registryEntries(registry: ModelRegistryFacade, snapshot: RegistrySnapshot): unknown[] {
   if (snapshot.entries !== null) return snapshot.entries;
   let raw: unknown;
+  let usedGetAll = false;
   try {
     if (typeof registry.getAvailable === "function") raw = registry.getAvailable();
-    if (!Array.isArray(raw) && typeof registry.getAll === "function") raw = registry.getAll();
+    if (!Array.isArray(raw) && typeof registry.getAll === "function") {
+      raw = registry.getAll();
+      usedGetAll = true;
+    }
   } catch {
     snapshot.entries = [];
     return snapshot.entries;
   }
-  snapshot.entries = Array.isArray(raw) ? raw : [];
+  const entries = Array.isArray(raw) ? raw : [];
+  snapshot.entries = usedGetAll ? entries.filter((entry) => entryAvailable(registry, entry)) : entries;
   return snapshot.entries;
 }
 
@@ -232,7 +239,6 @@ export function hasRegistryModel(
   for (const entry of registryEntries(registry, snapshot)) {
     if (modelId(entry) !== id) continue;
     if (provider !== undefined && modelProvider(entry) !== provider) continue;
-    if (!entryAvailable(registry, entry)) continue;
     return true;
   }
   return false;
@@ -377,8 +383,9 @@ export function selectorKind(
 /**
  * nicobailon accepts a bare id when exactly one provider exposes it, or when the
  * spawning session's provider is one of the candidates. omp exposes the authenticated
- * list at ctx.models.list(); upstream pi exposes the full registry. undefined → this
- * host cannot tell. A selector that resolves as provider/id is not a bare id.
+ * list at ctx.models.list(); upstream pi exposes the registry's auth-filtered snapshot.
+ * undefined means this host cannot tell. A selector that resolves as provider/id is not
+ * a bare id.
  */
 export function bareSelectorUnique(
   ctx: ExtensionContextLike,

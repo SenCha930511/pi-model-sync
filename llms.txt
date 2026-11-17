@@ -34,7 +34,7 @@ Global `~/.omp/agent/pi-model-sync.json` (or `~/.pi/agent/pi-model-sync.json` wh
 - `/model-sync preset list`, `/model-sync preset create <name>`, `/model-sync preset copy <source> <name>`, `/model-sync preset rename <old> <new>`, `/model-sync preset use [name]`, `/model-sync preset remove <name>`
 - `/model-sync status [off]`, `/model-sync use-session <preset|off>`, `/model-sync pause`, `/model-sync resume`, `/model-sync log [clear]`, `/model-sync doctor`, `/model-sync init`
 - Writes target the global file; add `--project` to write the project file. When the project file exists, a global write warns that the project layer overrides it. `add`/`set`/`remove`/`move` edit only the active preset; `preset remove` refuses the active preset. Unknown `--` options are rejected, and quotes keep a value with spaces together.
-- Typing the command shows argument completion for subcommands, profile `main` values and agent keys (`add`, `set`, `remove`, `move`), existing preset names (`preset use`, `preset remove`, and the source of `preset copy`/`preset rename`), and authenticated model ids for `show`, `add`, and the model position of `set`. A typed `--project` flag is preserved and not suggested twice.
+- Typing the command shows argument completion for subcommands, profile `main` values and agent keys (`set`, `remove`, `move`), existing profile `main` values plus authenticated model ids (`add`), model ids for `show` and the model position of `set`, the matched profile's agent keys after a `show` model, and existing preset names (`preset use`, `preset remove`, and the source of `preset copy`/`preset rename`). A typed `--project` flag is preserved and not suggested twice.
 
 ## Docs
 
