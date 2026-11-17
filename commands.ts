@@ -555,7 +555,10 @@ function cmdSet(
   if (agent === "*") {
     // Profile default: preserve existing per-agent entries; collapse to the plain
     // string form only when no per-agent entry exists (set * must not behave like add).
-    if (typeof profile.subagents === "string" || Object.keys(profile.subagents).length === 0) {
+    // Mirrors cmdRemove's collapse so both writers keep the same documented shape.
+    const hasPerAgentEntry =
+      typeof profile.subagents !== "string" && Object.keys(profile.subagents).some((key) => key !== "*");
+    if (!hasPerAgentEntry) {
       profile.subagents = model;
     } else {
       const map = cloneSubagentMap(profile.subagents);

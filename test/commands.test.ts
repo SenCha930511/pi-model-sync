@@ -155,6 +155,22 @@ describe("profile commands", () => {
     expect(projectActiveProfiles(readGlobal(cwd)).profiles).toHaveLength(1);
   });
 
+  test("set * collapses a default-only map back to the plain string form", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    const ctx = modelCtx(cwd);
+    writeGlobal(cwd, { profiles: [{ main: "openai/gpt-6", subagents: { "*": "openai/old" } }] });
+    await host.runCommand("set openai/gpt-6 * openai/luna", ctx);
+    expect(projectActiveProfiles(readGlobal(cwd)).profiles[0]?.subagents).toBe("openai/luna");
+
+    writeGlobal(cwd, { profiles: [{ main: "openai/gpt-6", subagents: { "*": "openai/old", scout: "openai/scout" } }] });
+    await host.runCommand("set openai/gpt-6 * openai/luna", ctx);
+    expect(projectActiveProfiles(readGlobal(cwd)).profiles[0]?.subagents).toEqual({
+      "*": "openai/luna",
+      scout: "openai/scout",
+    });
+  });
+
   test("move handles bottom, down, edges, single profiles, and invalid positions", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();
