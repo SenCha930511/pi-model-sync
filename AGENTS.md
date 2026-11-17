@@ -17,7 +17,7 @@ Eight modules: `adapters.ts` (pure detection and dialect translation), `config.t
 
 1. `currentModelRef(ctx)` → `{ provider, id }`; an unrecognizable model returns `undefined` before any config read.
 2. If the session is paused, record `skipped: session paused` and return `undefined`.
-3. If the event has `invocationKind`, no `modelRole`, and exactly one pre-expansion pattern that differs from the current model, treat it as an explicit omp per-call model and leave it alone (decision 11). Older hosts without `invocationKind` stay routable.
+3. If the event has `invocationKind`, no `modelRole`, and a non-empty pattern list with no entry matching the current model, treat it as an explicit omp per-call model and leave it alone (decision 11). Older hosts without `invocationKind` stay routable.
 4. `readConfig(ctx.cwd, sessionSelection(state))` never throws. It resolves the active layer, reads it, and returns the active-preset or session-preset projection. A missing file is not an error. Any file/parse error or dangling selection yields zero profiles plus a warning (the spawn hook ignores the warning, so fail-closed routing is silent on this path).
 5. `findProfile(config, modelRef)`: case-insensitive; `main` without `*` must equal `provider/id` or bare `id`; `*` is an explicit glob (crosses `/`, all other regex metachars escaped); first match in profile order wins; no substring matching.
 6. `pickSubagentSelector(profile, agentName)`: string form returns itself; object form tries the exact agent key, then an optional case-insensitive pass when `profile.agentMatch === "case-insensitive"`, then the `"*"` default.

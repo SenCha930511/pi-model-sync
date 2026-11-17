@@ -413,11 +413,29 @@ describe("routing hooks", () => {
       ),
     ).toBeUndefined();
 
+    expect(
+      host.emitSpawn(
+        { agent: "explore", patterns: ["openai/a", "anthropic/b"], invocationKind: "task", modelRole: undefined },
+        ctx,
+      ),
+    ).toBeUndefined();
+
     const routed = host.emitSpawn(
       { agent: "explore", patterns: ["openai/gpt-6"], invocationKind: "task", modelRole: undefined },
       ctx,
     ) as { model: string[] };
     expect(routed.model).toEqual(["openai/mini", "openai/gpt-6"]);
+
+    const routedList = host.emitSpawn(
+      {
+        agent: "explore",
+        patterns: ["openai/gpt-6", "openai/fallback"],
+        invocationKind: "task",
+        modelRole: undefined,
+      },
+      ctx,
+    ) as { model: string[] };
+    expect(routedList.model).toEqual(["openai/mini", "openai/gpt-6", "openai/fallback"]);
 
     const role = host.emitSpawn(
       { agent: "explore", patterns: ["openai/other"], invocationKind: "task", modelRole: "task" },

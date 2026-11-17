@@ -52,19 +52,26 @@ function extractAgentName(event: SubagentSpawnEvent): string {
 
 /**
  * omp does not expose perCallModel on the event. When the caller supplied one, the core
- * reports no modelRole and a single pattern that differs from the spawning session's
- * model. A normal spawn without a role reports the current model instead, so
+ * reports no modelRole and the caller's pattern list, which differs from the spawning
+ * session's model. A normal spawn without a role reports the current model instead, so
  * this guard leaves that case routable. Decision 11: an explicit model always wins.
  */
 function isExplicitPerCallModel(event: SubagentSpawnEvent, modelRef: CurrentModelRef): boolean {
   if (event.invocationKind === undefined || event.modelRole !== undefined) return false;
   const rawPatterns = event.patterns;
-  if (!Array.isArray(rawPatterns) || rawPatterns.length !== 1) return false;
-  const pattern = rawPatterns[0];
-  if (typeof pattern !== "string") return false;
-  const parsed = parseSelector(pattern);
-  if (!parsed || parsed.kind !== "reference") return false;
-  return !selectorRefs(parsed).some((ref) => sameModelRef(ref, modelRef));
+  const patterns = Array.isArray(rawPatterns)
+    ? rawPatterns
+    : typeof rawPatterns === "string"
+      ? [rawPatterns]
+      : [];
+  const refs = patterns
+    .filter((pattern): pattern is string => typeof pattern === "string")
+    .flatMap((pattern) => {
+      const parsed = parseSelector(pattern);
+      return parsed ? selectorRefs(parsed) : [];
+    });
+  if (refs.length === 0) return false;
+  return !refs.some((ref) => sameModelRef(ref, modelRef));
 }
 
 export function handleBeforeSubagentSpawn(
