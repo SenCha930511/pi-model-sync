@@ -358,18 +358,16 @@ export function normalizeSelector(selector: string, dialect: SelectorDialect): M
   if (base.includes("*")) return dialect.allowGlob ? { base } : undefined;
   const colon = base.lastIndexOf(":");
   const suffix = colon > 0 ? base.slice(colon + 1) : "";
-  if (suffix && THINKING_LEVELS.has(suffix)) {
-    if (dialect.thinking === "field") {
-      base = base.slice(0, colon);
-      return base ? { base, thinking: suffix } : undefined;
-    }
-    if (dialect.thinking === "none") {
-      base = base.slice(0, colon);
-      if (!base) return undefined;
-    }
+  let thinking: string | undefined;
+  if (suffix && THINKING_LEVELS.has(suffix) && dialect.thinking !== "suffix") {
+    base = base.slice(0, colon);
+    if (!base) return undefined;
+    // Field dialects move the level to its own property; "none" strips it;
+    // "suffix" dialects keep it inside the id (checked above, base untouched).
+    if (dialect.thinking === "field") thinking = suffix;
   }
   if (!dialect.allowBareId && !base.includes("/")) return undefined;
-  return { base };
+  return thinking === undefined ? { base } : { base, thinking };
 }
 
 /** Write the model (and the split thinking level, when the plugin has a field). */
