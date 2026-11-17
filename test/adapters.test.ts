@@ -22,7 +22,25 @@ function toolInfo(name: string, props: string[]): ToolInfoLike {
 
 // Verified against pi-subagents@0.88.1, @tintinweb/pi-subagents@0.25.0,
 // @gotgenes/pi-subagents@25.0.5, @mjakl/pi-subagent@3.1.0, and the HazAT/edxeth sources.
-const mjaklTool = toolInfo("subagent", ["calls"]);
+const mjaklTool: ToolInfoLike = {
+  name: "subagent",
+  parameters: {
+    type: "object",
+    properties: {
+      calls: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            agent: { type: "string" },
+            task: { type: "string" },
+            model: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+};
 const nicobailonTool = toolInfo("subagent", [
   "agent",
   "task",
@@ -113,6 +131,32 @@ describe("schema fingerprints", () => {
   test("a tool with no model field is not claimed", () => {
     const plain = toolInfo("subagent", ["agent", "task", "cwd"]);
     expect(adapterIdFor("subagent", { agent: "scout", task: "x" }, [plain])).toBeUndefined();
+  });
+
+  test("a structurally similar tool without a model field is not claimed", () => {
+    const plain = toolInfo("subagent", ["agent", "task", "workflow", "action", "options"]);
+    expect(adapterIdFor("subagent", { agent: "scout", task: "x" }, [plain])).toBeUndefined();
+  });
+
+  test("resolves local $ref and $defs properties", () => {
+    const referenced: ToolInfoLike = {
+      name: "Agent",
+      parameters: {
+        type: "object",
+        properties: { input: { $ref: "#/$defs/input" } },
+        $defs: {
+          input: {
+            type: "object",
+            properties: { prompt: {}, subagent_type: {}, model: {}, thinking: {} },
+          },
+        },
+      },
+    };
+    const props = schemaProps(referenced);
+    expect(props.has("prompt")).toBe(true);
+    expect(props.has("subagent_type")).toBe(true);
+    expect(props.has("model")).toBe(true);
+    expect(matchesSchema(ADAPTERS.find((adapter) => adapter.id === "tintinweb")!, props)).toBe(true);
   });
 });
 
@@ -240,6 +284,14 @@ describe("explicit model and resume guards", () => {
     expect(selection.slots.map((slot) => slot.agentName)).toEqual(["scout"]);
 
     expect(adapterIdFor("subagent", { model: "p/m", children: [{ agent: "scout" }] }, [edxethTool])).toBeUndefined();
+  });
+
+  test("edxeth falls back to * for a child without an agent", () => {
+    const input = { children: [{}, { agent: "scout" }] };
+    const selection = selectAdapter("subagent", input, [edxethTool]);
+    expect(selection.kind).toBe("match");
+    if (selection.kind !== "match") return;
+    expect(selection.slots.map((slot) => slot.agentName)).toEqual(["*", "scout"]);
   });
 
   test("edxeth treats an empty children array as a single spawn", () => {

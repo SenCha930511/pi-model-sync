@@ -43,7 +43,16 @@ function walk(file: string): void {
 walk(path.join(root, "index.ts"));
 
 const files = [...seen].map((file) => path.relative(root, file)).sort();
-assert.deepEqual(files, ["adapters.ts", "config.ts", "index.ts"]);
+assert.deepEqual(files, [
+  "adapters.ts",
+  "commands.ts",
+  "completions.ts",
+  "config.ts",
+  "hooks.ts",
+  "index.ts",
+  "resolver.ts",
+  "session.ts",
+]);
 assert.deepEqual(
   offenders,
   [],

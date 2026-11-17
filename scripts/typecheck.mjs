@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import { resolveCommandProbe } from "./command-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Shipped sources first, then tests and Bun-only scripts (which also need Bun's ambient types).
+// Shipped sources first, then tests, then the installed-host contract probe.
 const projects = [
   path.join(root, "scripts", "tsconfig.typecheck.json"),
   path.join(root, "scripts", "tsconfig.tests.json"),
+  path.join(root, "scripts", "tsconfig.hosts.json"),
 ];
 const localTsc = path.join(root, ".github", "omp-tools", "node_modules", "typescript", "bin", "tsc");
 const requiredTypes = ["node", "bun"].map((name) => path.join(root, ".github", "omp-tools", "node_modules", "@types", name));

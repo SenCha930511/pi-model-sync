@@ -1,4 +1,5 @@
-import { statSync, readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 
@@ -6,9 +7,13 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 export type SubagentMap = Record<string, string>;
 
+export type AgentMatch = "exact" | "case-insensitive";
+
 export interface Profile {
   main: string;
   subagents: string | SubagentMap;
+  /** Agent-key matching: exact first, then the optional case-insensitive pass, then `*`. */
+  agentMatch?: AgentMatch;
 }
 
 export type PresetMap = Record<string, Profile[]>;
@@ -33,6 +38,12 @@ export interface LayerRead {
   error: string | null;
   exists: boolean;
   warnings: string[];
+}
+
+/** In-memory routing selection for one session; never written to disk. */
+export interface SessionSelection {
+  preset?: string;
+  paused?: boolean;
 }
 
 // ── path resolution ──────────────────────────────────────────────
@@ -183,6 +194,8 @@ function readLayerWithStat(path: string, stat: FileStat | null): LayerRead {
     cached.size === stat.size &&
     cached.ino === stat.ino
   ) {
+    layerCache.delete(path);
+    layerCache.set(path, cached);
     return { config: cached.config, error: cached.error, exists: true, warnings: cached.warnings };
   }
   let config: ModelSyncConfig = INVALID_CONFIG;
@@ -206,12 +219,12 @@ function readLayerWithStat(path: string, stat: FileStat | null): LayerRead {
 
 /** For the spawn-interception path: never throws; zero profiles on any file error and
  * the same active-preset projection the command displays use otherwise. */
-export function readConfig(cwd: string): EffectiveConfig {
+export function readConfig(cwd: string, selection?: SessionSelection): EffectiveConfig {
   try {
     const { path, stat } = resolveActiveLayerWithStat(cwd);
     const layer = readLayerWithStat(path, stat !== undefined ? stat : statFile(path) ?? null);
     if (layer.error) return { profiles: [], warning: layer.error };
-    return projectActiveProfiles(layer.config);
+    return projectActiveProfiles(layer.config, selection);
   } catch {
     return { profiles: [] };
   }
@@ -219,18 +232,34 @@ export function readConfig(cwd: string): EffectiveConfig {
 
 // ── writes ───────────────────────────────────────────────────────
 
-/** Atomic write: mkdir → unique <path>.<pid>.<timestamp>.tmp → rename; the tmp file is
- * removed on failure and the mtime cache entry invalidated after a successful rename.
+/** Follow symlinks so an atomic rename updates the real file instead of replacing a dotfile link. */
+function resolveWriteTarget(path: string): string {
+  let current = path;
+  for (let depth = 0; depth < 8; depth += 1) {
+    let link: string;
+    try {
+      if (!lstatSync(current).isSymbolicLink()) return current;
+      link = readlinkSync(current);
+    } catch {
+      return current;
+    }
+    current = isAbsolute(link) ? link : resolve(dirname(current), link);
+  }
+  return current;
+}
+
+/** Atomic write: mkdir → unique <path>.<pid>.<uuid>.tmp → rename; the tmp file is
+ * removed on failure and the cache entries invalidated after a successful rename.
  * The parse guard makes a malformed document impossible to persist. */
 export function writeConfig(path: string, config: ModelSyncConfig): void {
   const parsed = parseConfig(config);
   if (parsed.error) throw new Error(`Refusing to write an invalid config: ${parsed.error}`);
-  mkdirSync(dirname(path), { recursive: true });
-  // Unique suffix: concurrent sessions must not fight over one shared tmp file.
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const destination = resolveWriteTarget(path);
+  mkdirSync(dirname(destination), { recursive: true });
+  const tmp = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(parsed.config, null, 2)}\n`, "utf8");
-    renameSync(tmp, path);
+    renameSync(tmp, destination);
   } catch (err) {
     try {
       unlinkSync(tmp);
@@ -240,6 +269,7 @@ export function writeConfig(path: string, config: ModelSyncConfig): void {
     throw err;
   }
   layerCache.delete(path);
+  if (destination !== path) layerCache.delete(destination);
 }
 
 // ── matching ─────────────────────────────────────────────────────
@@ -286,13 +316,29 @@ export function findProfile(
 }
 
 /**
- * String form returns itself; object form tries the exact agent key, then falls back to `*`.
- * Own-property lookup only: prototype-member agent names ("toString", "constructor", ...)
- * must fall through to `*` — pi-subagent agent names are arbitrary model input.
+ * String form returns itself. Object form tries the exact agent key, then the optional
+ * case-insensitive pass, then `*`. Own-property lookup only: prototype-member agent names
+ * ("toString", "constructor", ...) must fall through to `*`, because pi-subagent agent
+ * names are arbitrary model input.
  */
 export function pickSubagentSelector(profile: Profile, agentName: string): string | undefined {
   if (typeof profile.subagents === "string") return profile.subagents;
-  return Object.hasOwn(profile.subagents, agentName) ? profile.subagents[agentName] : profile.subagents["*"];
+  if (Object.hasOwn(profile.subagents, agentName)) return profile.subagents[agentName];
+  if (profile.agentMatch === "case-insensitive") {
+    const lower = agentName.toLowerCase();
+    for (const [key, selector] of Object.entries(profile.subagents)) {
+      if (key.toLowerCase() === lower) return selector;
+    }
+  }
+  return profile.subagents["*"];
+}
+
+/** Human-readable one-line form used by list, show, and completion descriptions. */
+export function summarizeSubagents(subagents: Profile["subagents"]): string {
+  if (typeof subagents === "string") return subagents;
+  return Object.entries(subagents)
+    .map(([agent, selector]) => `${agent}=${selector}`)
+    .join(", ");
 }
 
 // ── presets and clones ───────────────────────────────────────────
@@ -317,6 +363,7 @@ export function cloneProfiles(profiles: Profile[]): Profile[] {
     main: profile.main,
     subagents:
       typeof profile.subagents === "string" ? profile.subagents : cloneSubagentMap(profile.subagents),
+    ...(profile.agentMatch ? { agentMatch: profile.agentMatch } : {}),
   }));
 }
 
@@ -334,7 +381,23 @@ export function cloneConfig(config: ModelSyncConfig): ModelSyncConfig {
 
 /** The only active-selection policy. Legacy configs expose the virtual "default" preset.
  * Named configs fail closed on a missing or dangling active name — never fall back. */
-export function projectActiveProfiles(config: ModelSyncConfig): EffectiveConfig {
+export function projectActiveProfiles(
+  config: ModelSyncConfig,
+  selection?: SessionSelection,
+): EffectiveConfig {
+  if (selection?.paused) {
+    return { profiles: [], warning: "Routing is paused for this session." };
+  }
+  if (selection?.preset !== undefined && selection.preset !== "") {
+    const profiles = getPresetProfiles(config, selection.preset);
+    if (profiles === undefined) {
+      return {
+        profiles: [],
+        warning: `Session preset "${selection.preset}" does not exist; no profiles are active.`,
+      };
+    }
+    return { activePreset: selection.preset, profiles };
+  }
   if (!isNamedConfig(config)) {
     return { activePreset: "default", profiles: config.profiles };
   }
@@ -414,6 +477,11 @@ function normalizeProfiles(rawProfiles: unknown, scope: string): NormalizedProfi
       continue;
     }
     const record = entry as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (key !== "main" && key !== "subagents" && key !== "agentMatch") {
+        warnings.push(`Ignored unknown key "${key}" in ${where}; it will be dropped on the next write.`);
+      }
+    }
     const mainRaw = record.main;
     if (typeof mainRaw !== "string" || !mainRaw.trim()) {
       warnings.push(`Skipped ${where}: "main" must be a non-blank string.`);
@@ -451,7 +519,13 @@ function normalizeProfiles(rawProfiles: unknown, scope: string): NormalizedProfi
       warnings.push(`Skipped ${where}: "subagents" must be a non-blank string or an object of non-blank strings.`);
       continue;
     }
-    profiles.push({ main: mainRaw.trim(), subagents });
+    let agentMatch: AgentMatch | undefined;
+    const rawMatch = record.agentMatch;
+    if (rawMatch !== undefined) {
+      if (rawMatch === "exact" || rawMatch === "case-insensitive") agentMatch = rawMatch;
+      else warnings.push(`Ignored "agentMatch" in ${where}: use "exact" or "case-insensitive".`);
+    }
+    profiles.push(agentMatch === undefined ? { main: mainRaw.trim(), subagents } : { main: mainRaw.trim(), subagents, agentMatch });
   }
   return { profiles, warnings };
 }
@@ -490,6 +564,11 @@ function parseConfig(raw: unknown): ParsedConfig {
     }
     const presets: PresetMap = Object.create(null) as PresetMap;
     const warnings: string[] = [];
+    for (const key of Object.keys(record)) {
+      if (key !== "presets" && key !== "activePreset") {
+        warnings.push(`Ignored unknown config key "${key}"; it will be dropped on the next write.`);
+      }
+    }
     for (const [rawName, rawProfiles] of Object.entries(rawPresets as Record<string, unknown>)) {
       const name = rawName.trim();
       if (!isValidPresetName(name)) {
@@ -515,12 +594,23 @@ function parseConfig(raw: unknown): ParsedConfig {
     if (Object.keys(record).length === 0) {
       return { config: { profiles: [] }, error: null, warnings: [] };
     }
-    return invalidConfig('Config must define "profiles" or "presets".');
+    const unknown = Object.keys(record).filter(
+      (key) => key !== "profiles" && key !== "presets" && key !== "activePreset",
+    );
+    const suffix = unknown.length > 0 ? ` Unknown keys: ${unknown.join(", ")}.` : "";
+    return invalidConfig(`Config must define "profiles" or "presets".${suffix}`);
   }
   const rawProfiles = record.profiles;
   if (!Array.isArray(rawProfiles)) {
     return invalidConfig('"profiles" must be an array of profiles.');
   }
   const normalized = normalizeProfiles(rawProfiles, "the legacy profile list");
-  return { config: { profiles: normalized.profiles }, error: null, warnings: normalized.warnings };
+  const warnings = Object.keys(record)
+    .filter((key) => key !== "profiles")
+    .map((key) => `Ignored unknown config key "${key}"; it will be dropped on the next write.`);
+  return {
+    config: { profiles: normalized.profiles },
+    error: null,
+    warnings: [...warnings, ...normalized.warnings],
+  };
 }

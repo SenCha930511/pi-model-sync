@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { access, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,7 +10,20 @@ import { resolveCommandProbe } from "./command-probe.mjs";
 
 const execute = promisify(execFile);
 const PACKAGE_NAME = "@sencha930511/pi-model-sync";
-const EXPECTED_FILES = ["LICENSE", "README.md", "adapters.ts", "config.ts", "index.ts", "llms.txt", "package.json"];
+const EXPECTED_FILES = [
+  "LICENSE",
+  "README.md",
+  "adapters.ts",
+  "commands.ts",
+  "completions.ts",
+  "config.ts",
+  "hooks.ts",
+  "index.ts",
+  "llms.txt",
+  "package.json",
+  "resolver.ts",
+  "session.ts",
+];
 
 const runNpm = (args, options) => {
   const command = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -191,11 +204,17 @@ try {
   console.log("Installed npm tarball loads in OMP with an isolated home: PASS");
 
   const piHome = path.join(temporary, "pi-home");
+  const piAgentDir = path.join(piHome, "agent");
+  await mkdir(piAgentDir, { recursive: true });
+  writeFileSync(
+    path.join(piAgentDir, "pi-model-sync.json"),
+    `${JSON.stringify({ profiles: [{ main: "*", subagents: "openai/mini" }] }, null, 2)}\n`,
+  );
   const piEnv = {
     ...process.env,
     HOME: piHome,
     USERPROFILE: piHome,
-    PI_CODING_AGENT_DIR: path.join(piHome, "agent"),
+    PI_CODING_AGENT_DIR: piAgentDir,
     PI_OFFLINE: "1",
   };
   const piCommand = resolvePiCommand(root);
@@ -212,7 +231,11 @@ try {
     "-e",
     installedEntry,
   ]);
-  const rpc = await runWithInput(piProbe.command, piProbe.args, `${JSON.stringify({ id: "commands", type: "get_commands" })}\n`, {
+  const rpcInput = [
+    JSON.stringify({ id: "commands", type: "get_commands" }),
+    JSON.stringify({ id: "list", type: "prompt", message: "/model-sync list" }),
+  ].join("\n");
+  const rpc = await runWithInput(piProbe.command, piProbe.args, `${rpcInput}\n`, {
     cwd: temporary,
     env: piEnv,
     timeout: 120_000,
@@ -221,13 +244,12 @@ try {
   });
   assert.equal(rpc.code, 0, `upstream pi RPC probe exited with ${rpc.code}:\n${rpc.stderr}`);
   assert.ok(!`${rpc.stdout}\n${rpc.stderr}`.includes("Failed to load extension"), `upstream pi reported extension load failure:\n${rpc.stderr}`);
-  const response = rpc.stdout
+  const records = rpc.stdout
     .split("\n")
     .map((line) => line.replace(/\r$/, "").trim())
     .filter((line) => line.startsWith("{"))
-    .map((line) => JSON.parse(line))
-    .find((record) => record.type === "response" && record.id === "commands");
-  assert.ok(response?.success, `upstream pi get_commands failed:\n${rpc.stdout}\n${rpc.stderr}`);
+    .map((line) => JSON.parse(line));
+  const response = records.find((record) => record.type === "response" && record.id === "commands");
   const command = response.data.commands.find((entry) => entry.name === "model-sync");
   assert.equal(command?.source, "extension", `upstream pi did not register /model-sync: ${JSON.stringify(response.data.commands)}`);
   // Compare the package-relative suffix: Windows may report a long or short (8.3) temp path.
@@ -235,7 +257,18 @@ try {
     String(command.sourceInfo?.path).replaceAll("\\", "/").endsWith("node_modules/@sencha930511/pi-model-sync/index.ts"),
     `/model-sync was registered from an unexpected path: ${command.sourceInfo?.path}`,
   );
-  console.log("Installed npm tarball registers /model-sync in upstream pi with an isolated home: PASS");
+  const notifications = records.filter(
+    (record) => record.type === "extension_ui_request" && record.method === "notify",
+  );
+  assert.ok(
+    notifications.some((record) => String(record.message).includes("pi-model-sync active layer")),
+    `upstream pi did not execute /model-sync list:\n${rpc.stdout}\n${rpc.stderr}`,
+  );
+  assert.ok(
+    notifications.some((record) => String(record.message).includes("openai/mini")),
+    `upstream pi /model-sync list did not read the isolated config:\n${rpc.stdout}\n${rpc.stderr}`,
+  );
+  console.log("Installed npm tarball registers /model-sync and executes it in upstream pi with an isolated home: PASS");
 } finally {
   await rm(temporary, { recursive: true, force: true });
   console.log("Removed temporary package and consumer installation");

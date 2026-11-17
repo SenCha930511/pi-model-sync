@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -24,119 +23,11 @@ import {
   writeConfig,
 } from "../config";
 import type { ModelSyncConfig } from "../config";
-import modelSync from "../index";
+import { createHostHarness, makeTempDir, useIsolatedConfig } from "./harness";
 
-interface NotifyRecord {
-  message: string;
-  level: "info" | "warning" | "error";
-}
-
-interface MockCommand {
-  description: string;
-  getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string; description?: string }> | null;
-  handler: (args: string, ctx: unknown) => Promise<void> | void;
-}
+useIsolatedConfig();
 
 const configModuleUrl = pathToFileURL(path.resolve(import.meta.dir, "..", "config.ts")).href;
-const tempRoots: string[] = [];
-const savedEnv = {
-  PI_MODEL_SYNC_CONFIG: process.env.PI_MODEL_SYNC_CONFIG,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-};
-
-function makeTempDir(prefix = "pi-model-sync-test-"): string {
-  const dir = mkdtempSync(path.join(realpathSync(tmpdir()), prefix));
-  tempRoots.push(dir);
-  return dir;
-}
-
-function restoreEnv(): void {
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-}
-
-beforeEach(() => {
-  // Isolate every test from the developer's real ~/.omp and ~/.pi directories.
-  const isolatedAgent = makeTempDir("isolated-agent-");
-  delete process.env.PI_MODEL_SYNC_CONFIG;
-  process.env.PI_CODING_AGENT_DIR = path.join(isolatedAgent, "agent");
-});
-
-afterEach(() => {
-  restoreEnv();
-  while (tempRoots.length > 0) {
-    const dir = tempRoots.pop();
-    if (dir) rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function createHostHarness(
-  options: { failLabel?: boolean; failSpawnHook?: boolean; tools?: unknown[]; failTools?: boolean } = {},
-) {
-  const hooks = new Map<string, (...args: unknown[]) => unknown>();
-  let command: MockCommand | undefined;
-  let label: string | undefined;
-
-  const api = {
-    setLabel(next: string): void {
-      if (options.failLabel) throw new Error("incompatible setLabel");
-      label = next;
-    },
-    on(event: string, handler: (...args: unknown[]) => unknown): void {
-      if (options.failSpawnHook && event === "before_subagent_spawn") {
-        throw new Error("unsupported event");
-      }
-      hooks.set(event, handler);
-    },
-    registerCommand(name: string, def: MockCommand): void {
-      if (name === "model-sync") command = def;
-    },
-    ...(options.tools || options.failTools
-      ? {
-          getAllTools(): unknown[] {
-            if (options.failTools) throw new Error("incompatible getAllTools");
-            return options.tools ?? [];
-          },
-        }
-      : {}),
-  };
-
-  modelSync(api as never);
-
-  return {
-    get label() {
-      return label;
-    },
-    hooks,
-    command: () => {
-      if (!command) throw new Error("model-sync command not registered");
-      return command;
-    },
-    async runCommand(args: string, ctx: Record<string, unknown>) {
-      const notifications: NotifyRecord[] = [];
-      const fullCtx = {
-        ...ctx,
-        ui: {
-          notify(message: string, level: NotifyRecord["level"] = "info") {
-            notifications.push({ message, level });
-          },
-        },
-      };
-      await command?.handler(args, fullCtx);
-      return notifications;
-    },
-    emitSpawn(event: Record<string, unknown>, ctx: Record<string, unknown>) {
-      const handler = hooks.get("before_subagent_spawn");
-      return handler ? handler(event, ctx) : undefined;
-    },
-    emitToolCall(event: Record<string, unknown>, ctx: Record<string, unknown>) {
-      const handler = hooks.get("tool_call");
-      return handler ? handler(event, ctx) : undefined;
-    },
-  };
-}
 
 describe("config paths and layer precedence", () => {
   test("PI_MODEL_SYNC_CONFIG overrides PI_CODING_AGENT_DIR and expands relative / ~/ paths", () => {
@@ -321,6 +212,38 @@ describe("parsing, projection, cloning, and atomic writes", () => {
     expect(isValidPresetName("bad name")).toBe(false);
     expect(isValidPresetName("")).toBe(false);
   });
+
+  test("writeConfig follows a symlink instead of replacing it", () => {
+    const dir = makeTempDir();
+    const real = path.join(dir, "real.json");
+    const link = path.join(dir, "link.json");
+    writeConfig(real, { profiles: [] });
+    symlinkSync(real, link);
+    writeConfig(link, { profiles: [{ main: "*", subagents: "openai/mini" }] });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(projectActiveProfiles(readLayer(real).config).profiles).toHaveLength(1);
+  });
+
+  test("warns on unknown keys and parses agentMatch", () => {
+    const dir = makeTempDir();
+    const file = path.join(dir, "unknown.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        profiles: [
+          { main: "a", subagents: { Explore: "b" }, agentMatch: "case-insensitive", extra: true },
+        ],
+        extraRoot: 1,
+      }),
+    );
+    const read = readLayer(file);
+    expect(read.error).toBeNull();
+    expect(read.warnings.some((warning) => warning.includes("extraRoot"))).toBe(true);
+    expect(read.warnings.some((warning) => warning.includes('"extra"'))).toBe(true);
+    const profile = projectActiveProfiles(read.config).profiles[0]!;
+    expect(profile.agentMatch).toBe("case-insensitive");
+    expect(pickSubagentSelector(profile, "explore")).toBe("b");
+  });
 });
 
 describe("matching and selector picking", () => {
@@ -463,8 +386,7 @@ describe("extension hooks (omp & upstream pi)", () => {
       { agent: "unlisted", prompt: "f" },
     ];
     const input = { calls };
-    const result = host.emitToolCall({ toolName: "subagent", input }, upstreamCtx) as { input: typeof input };
-    expect(result.input).toBe(input);
+    expect(host.emitToolCall({ toolName: "subagent", input }, upstreamCtx)).toBeUndefined();
     expect(calls[0]!.model).toBe("explicit/override");
     expect(calls[1]!.model).toBe("anthropic/claude-haiku-4:high");
     expect(calls[2]!.model).toBe("anthropic/claude-*");
@@ -513,10 +435,7 @@ describe("extension hooks (omp & upstream pi)", () => {
     };
 
     const agentInput: Record<string, unknown> = { subagent_type: "Explore", prompt: "x" };
-    const routed = host.emitToolCall({ toolName: "Agent", input: agentInput }, ctx) as {
-      input: Record<string, unknown>;
-    };
-    expect(routed.input).toBe(agentInput);
+    expect(host.emitToolCall({ toolName: "Agent", input: agentInput }, ctx)).toBeUndefined();
     expect(agentInput).toEqual({
       subagent_type: "Explore",
       prompt: "x",
@@ -558,7 +477,7 @@ describe("extension hooks (omp & upstream pi)", () => {
       parameters: {
         type: "object",
         properties: Object.fromEntries(
-          ["agent", "task", "workflow", "action", "options"].map((prop) => [prop, { type: "string" }]),
+          ["agent", "task", "workflow", "action", "options", "model"].map((prop) => [prop, { type: "string" }]),
         ),
       },
     };

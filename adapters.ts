@@ -157,8 +157,8 @@ function collectEdxeth(input: Record<string, unknown>): CallSlot[] {
     const slots: CallSlot[] = [];
     for (const child of children) {
       if (!isRecord(child)) continue;
-      const agentName = nonBlank(child.agent);
-      if (!agentName || nonBlank(child.model)) continue;
+      const agentName = nonBlank(child.agent) ?? "*";
+      if (nonBlank(child.model)) continue;
       slots.push({ record: child, agentName });
     }
     return slots;
@@ -172,7 +172,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "mjakl",
     label: "@mjakl/pi-subagent",
     toolNames: ["subagent"],
-    requiredProps: ["calls"],
+    requiredProps: ["calls", "model"],
     forbiddenProps: ["subagent_type", "workflow", "name", "children", "tasks", "chain"],
     fallbackProps: ["calls"],
     // Unchanged legacy behavior: the selector is passed through verbatim and the host
@@ -184,7 +184,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "nicobailon",
     label: "pi-subagents",
     toolNames: ["subagent"],
-    requiredProps: ["agent", "task", "workflow", "action", "options"],
+    requiredProps: ["agent", "task", "workflow", "action", "options", "model"],
     forbiddenProps: ["calls", "subagent_type", "children", "resumeSessionId"],
     fallbackProps: ["options", "workflow", "tasks", "chain", "action"],
     dialect: {
@@ -210,7 +210,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "gotgenes",
     label: "@gotgenes/pi-subagents",
     toolNames: ["subagent"],
-    requiredProps: ["prompt", "subagent_type"],
+    requiredProps: ["prompt", "subagent_type", "model"],
     forbiddenProps: ["calls", "workflow", "children", "tasks", "chain"],
     fallbackProps: ["subagent_type"],
     dialect: { thinking: "field", thinkingField: "thinking", allowAlias: false, allowGlob: false, allowBareId: true },
@@ -220,7 +220,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "hazat",
     label: "pi-interactive-subagents",
     toolNames: ["subagent"],
-    requiredProps: ["name", "task", "interactive", "resumeSessionId"],
+    requiredProps: ["name", "task", "interactive", "resumeSessionId", "model"],
     forbiddenProps: ["subagent_type", "calls", "children", "workflow"],
     fallbackProps: ["interactive", "resumeSessionId"],
     // The plugin appends its own `:thinking` from agent frontmatter; a suffix here
@@ -232,7 +232,7 @@ export const ADAPTERS: readonly SubagentAdapter[] = [
     id: "edxeth",
     label: "edxeth/pi-subagents",
     toolNames: ["subagent"],
-    requiredProps: ["name", "task", "title", "children"],
+    requiredProps: ["name", "task", "title", "children", "model"],
     forbiddenProps: ["subagent_type", "calls", "workflow"],
     fallbackProps: ["title", "children"],
     // This plugin wants an exact provider/model id; a bare id is skipped rather than
@@ -246,21 +246,53 @@ export const ADAPTER_TOOL_NAMES: ReadonlySet<string> = new Set(
   ADAPTERS.flatMap((adapter) => adapter.toolNames),
 );
 
-function collectSchemaProps(schema: unknown, into: Set<string>, depth: number): void {
-  if (!isRecord(schema) || depth > 4) return;
+function resolveSchemaRef(ref: string, root: Record<string, unknown>): unknown {
+  if (!ref.startsWith("#/")) return undefined;
+  let current: unknown = root;
+  for (const part of ref.slice(2).split("/")) {
+    if (!isRecord(current)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function collectSchemaProps(
+  schema: unknown,
+  into: Set<string>,
+  depth: number,
+  root?: Record<string, unknown>,
+): void {
+  if (!isRecord(schema) || depth > 8) return;
+  const document = root ?? schema;
+  const ref = schema.$ref;
+  if (typeof ref === "string") {
+    const target = resolveSchemaRef(ref, document);
+    if (target) collectSchemaProps(target, into, depth + 1, document);
+  }
   const properties = schema.properties;
   if (isRecord(properties)) {
-    for (const key of Object.keys(properties)) into.add(key);
+    for (const [key, value] of Object.entries(properties)) {
+      into.add(key);
+      collectSchemaProps(value, into, depth + 1, document);
+    }
   }
   const items = schema.items;
-  if (isRecord(items)) collectSchemaProps(items, into, depth + 1);
+  if (isRecord(items)) collectSchemaProps(items, into, depth + 1, document);
   else if (Array.isArray(items)) {
-    for (const item of items) collectSchemaProps(item, into, depth + 1);
+    for (const item of items) collectSchemaProps(item, into, depth + 1, document);
   }
   for (const key of ["anyOf", "oneOf", "allOf"]) {
     const branches = schema[key];
     if (Array.isArray(branches)) {
-      for (const branch of branches) collectSchemaProps(branch, into, depth + 1);
+      for (const branch of branches) collectSchemaProps(branch, into, depth + 1, document);
+    }
+  }
+  for (const key of ["$defs", "definitions"]) {
+    const definitions = schema[key];
+    if (isRecord(definitions)) {
+      for (const definition of Object.values(definitions)) {
+        collectSchemaProps(definition, into, depth + 1, document);
+      }
     }
   }
 }
