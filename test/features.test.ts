@@ -522,6 +522,33 @@ describe("completion", () => {
     expect(complete("set openai/gpt-6 --nope ")).toBeNull();
   });
 
+  test("handles quoted option-like values and blank current tokens", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    writeGlobal(cwd, {
+      activePreset: "default",
+      presets: { default: [], "--help": [], "--project": [] },
+    });
+    const ctx = modelCtx(cwd, {
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+        list: () => [{ provider: "openai", id: "gpt-6" }],
+      },
+    });
+    host.emitSessionStart(ctx);
+    const complete = host.command().getArgumentCompletions!;
+
+    expect(complete('add ""')).toBeNull();
+    expect(complete('preset use "--help"')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 'preset use "--help"', label: "--help" })]),
+    );
+    expect(complete('preset use "--project"')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 'preset use "--project"', label: "--project" })]),
+    );
+    expect(complete("preset bogus --p")).toBeNull();
+  });
+
   test("returns null when the target has no config or the profile has a string default", () => {
     const empty = createHostHarness();
     empty.emitSessionStart({

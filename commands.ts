@@ -215,11 +215,15 @@ async function handleCommand(
       cmdList(ctx, host);
       return;
     case "show": {
-      if (rest.length > 2) {
+      const [modelArg, agentArg] = rest;
+      if (
+        rest.length > 2 ||
+        (modelArg !== undefined && !modelArg) ||
+        (agentArg !== undefined && !agentArg)
+      ) {
         notify(ctx, `Usage: /model-sync show [model] [agent]\n${USAGE}`, "warning");
         return;
       }
-      const [modelArg, agentArg] = rest;
       cmdShow(ctx, host, modelArg, agentArg);
       return;
     }

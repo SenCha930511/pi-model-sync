@@ -248,16 +248,24 @@ export const ADAPTER_TOOL_NAMES: ReadonlySet<string> = new Set(
   ADAPTERS.flatMap((adapter) => adapter.toolNames),
 );
 
+/** RFC 6901: ~1 is an escaped /, ~0 an escaped ~, and numeric segments index arrays. */
 function resolveSchemaRef(ref: string, root: Record<string, unknown>): unknown {
   if (!ref.startsWith("#/")) return undefined;
   let current: unknown = root;
-  for (const part of ref.slice(2).split("/")) {
-    if (!isRecord(current)) return undefined;
-    current = current[part];
+  for (const raw of ref.slice(2).split("/")) {
+    const part = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (current === null || typeof current !== "object") return undefined;
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) return undefined;
+      current = current[index];
+    } else {
+      if (!Object.hasOwn(current, part)) return undefined;
+      current = (current as Record<string, unknown>)[part];
+    }
   }
   return current;
 }
-
 function collectSchemaProps(
   schema: unknown,
   into: Set<string>,

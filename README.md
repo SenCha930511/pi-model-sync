@@ -317,8 +317,8 @@ Invalid profile entries are skipped with a warning, not silently. This covers a 
 At `tool_call` time the extension identifies the plugin behind the call and injects a model only when that call has none.
 
 1. The tool name must be one of the adapter tool names (`subagent` or `Agent`).
-2. `pi.getAllTools()` is read once. Each adapter declares required and forbidden schema property names, including a `model` field. The schema properties are collected recursively through `properties`, `items`, `anyOf`, `oneOf`, and `allOf`, and through local `$ref` targets in `$defs` or `definitions`, up to a bounded depth.
-3. Adapters whose required properties are present and whose forbidden properties are absent become candidates. The call shape then picks the adapter that can actually inject into this input.
+2. `pi.getAllTools()` is read once. Each adapter declares required property **paths**, dot-joined from the schema root (`@mjakl/pi-subagent` requires `calls` and `calls.model`), and forbidden property names that disqualify at any depth. Paths are collected through `properties`, `items`, `anyOf`, `oneOf`, and `allOf` (array items and union branches extend their property), and local `$ref` targets are expanded at the referencing position following RFC 6901 escapes and array indices. Unreferenced `$defs`/`definitions` contribute nothing, so a `model` field nested under another object or left in an unused definition cannot satisfy a fingerprint.
+3. Adapters whose required paths are present and whose forbidden names are absent become candidates. The call shape then picks the adapter that can actually inject into this input.
 4. A host without `getAllTools()`, or a schema that no longer matches, falls back to a stricter call-shape check. The fallback requires an adapter-specific marker property, so an ambiguous `{agent, task}` shape is not claimed.
 5. If more than one adapter still matches, the call is skipped with a one-time TUI warning. This is a setup problem, not a per-call guess.
 
