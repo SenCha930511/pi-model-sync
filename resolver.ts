@@ -377,7 +377,10 @@ export function selectorKind(
     return "unknown";
   }
   if (parsed.provider === undefined) return "bare";
-  return selectorResolvable(ctx, selector, snapshot) === true ? "provider-id" : "unknown";
+  // Without enumeration we cannot confirm provider/id: the generic resolver also
+  // accepts bare ids, so a slash-containing bare id would masquerade as provider/id.
+  // Callers that require a confirmed provider/id must treat "unknown" as a rejection.
+  return "unknown";
 }
 
 /**
@@ -456,7 +459,7 @@ export function adapterAcceptsSelector(
 ): boolean {
   const spec = normalizeSelector(selector, adapter.dialect);
   if (!spec) return false;
-  if (!adapter.dialect.allowBareId && selectorKind(ctx, spec.base, snapshot) === "bare") {
+  if (!adapter.dialect.allowBareId && selectorKind(ctx, spec.base, snapshot) !== "provider-id") {
     return false;
   }
   if (adapter.dialect.uniqueBareId) {

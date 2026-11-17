@@ -253,7 +253,7 @@ export function handleToolCall(
       }
       if (!selection.adapter.dialect.allowBareId) {
         registrySnapshot ??= createRegistrySnapshot();
-        if (selectorKind(ctx, spec.base, registrySnapshot) === "bare") {
+        if (selectorKind(ctx, spec.base, registrySnapshot) !== "provider-id") {
           warnUnresolvableOnce(
             ctx,
             state,
@@ -267,7 +267,7 @@ export function handleToolCall(
             main: profile.main,
             selector,
             adapter: selection.adapter.id,
-            outcome: "skipped: bare id rejected by plugin dialect",
+            outcome: "skipped: selector not confirmed as provider/id",
           });
           continue;
         }

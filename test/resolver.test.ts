@@ -210,6 +210,36 @@ describe("plugin dialect checks", () => {
     ).toBe(true);
   });
 
+  test("an exact-only plugin rejects selectors the host cannot confirm as provider/id", () => {
+    const noEnumeration: ExtensionContextLike = {
+      cwd: "/tmp",
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+      },
+    };
+    expect(selectorKind(noEnumeration, "meta-llama/Llama-3")).toBe("unknown");
+    expect(adapterAcceptsSelector(noEnumeration, "meta-llama/Llama-3", edxeth, createRegistrySnapshot())).toBe(
+      false,
+    );
+
+    const failingList: ExtensionContextLike = {
+      cwd: "/tmp",
+      models: {
+        current: () => ({ provider: "openai", id: "gpt-6" }),
+        resolve: () => true,
+        list: () => {
+          throw new Error("catalog unavailable");
+        },
+      },
+    };
+    const snapshot = createRegistrySnapshot();
+    expect(selectorKind(failingList, "meta-llama/Llama-3", snapshot)).toBe("unknown");
+    expect(adapterAcceptsSelector(failingList, "meta-llama/Llama-3", edxeth, createRegistrySnapshot())).toBe(
+      false,
+    );
+  });
+
   test("rejects an ambiguous bare id for nicobailon", () => {
     const ctx = omp([model("openai", "gpt-x"), model("anthropic", "gpt-x")], model("google", "gpt-6"));
     expect(adapterAcceptsSelector(ctx, "gpt-x", nicobailon, createRegistrySnapshot())).toBe(false);
