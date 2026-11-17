@@ -73,6 +73,26 @@ describe("POSIX filesystem invariants", () => {
     expect(readConfig(cwd).profiles[0]?.subagents).toBe("openai/project");
   });
 
+  test("writeConfig refuses a symlink chain it cannot resolve", () => {
+    const dir = makeTempDir("loop-");
+    const a = path.join(dir, "a.json");
+    const b = path.join(dir, "b.json");
+    symlinkSync(b, a);
+    symlinkSync(a, b);
+    expect(() => writeConfig(a, { profiles: [] })).toThrow(/cannot resolve/);
+    expect(lstatSync(a).isSymbolicLink()).toBe(true);
+
+    const deep = makeTempDir("deep-");
+    const head = path.join(deep, "head.json");
+    let current = head;
+    for (let index = 0; index < 10; index += 1) {
+      const next = path.join(deep, `step-${index}.json`);
+      symlinkSync(next, current);
+      current = next;
+    }
+    expect(() => writeConfig(head, { profiles: [] })).toThrow(/cannot resolve/);
+  });
+
   test("writeConfig cleans up temporary file when target directory is read-only", () => {
     if (process.getuid?.() === 0) return;
     const dir = makeTempDir("ro-");
