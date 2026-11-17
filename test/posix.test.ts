@@ -93,6 +93,19 @@ describe("POSIX filesystem invariants", () => {
     expect(() => writeConfig(head, { profiles: [] })).toThrow(/cannot resolve/);
   });
 
+  test("a rewrite through a symlink refreshes both cache entries", () => {
+    const dir = makeTempDir("cache-link-");
+    const real = path.join(dir, "real.json");
+    const link = path.join(dir, "link.json");
+    writeConfig(real, { profiles: [{ main: "a", subagents: "x" }] });
+    symlinkSync(real, link);
+    expect(readLayer(link).exists).toBe(true);
+
+    writeConfig(link, { profiles: [{ main: "a", subagents: "y" }] });
+    expect(projectActiveProfiles(readLayer(link).config).profiles[0]?.subagents).toBe("y");
+    expect(projectActiveProfiles(readLayer(real).config).profiles[0]?.subagents).toBe("y");
+  });
+
   test("writeConfig cleans up temporary file when target directory is read-only", () => {
     if (process.getuid?.() === 0) return;
     const dir = makeTempDir("ro-");

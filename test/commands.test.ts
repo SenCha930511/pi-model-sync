@@ -5,6 +5,7 @@ import {
   getGlobalConfigPath,
   getProjectConfigPath,
   isNamedConfig,
+  getPresetProfiles,
   presetNames,
   projectActiveProfiles,
   readLayer,
@@ -296,6 +297,18 @@ describe("preset commands", () => {
     expect(invalid[0]?.level).toBe("warning");
 
     await host.runCommand("preset copy default backup", ctx);
+
+    await host.runCommand("preset use backup", ctx);
+    await host.runCommand("add anthropic/claude-4 anthropic/haiku", ctx);
+    const isolated = readGlobal(cwd);
+    expect(getPresetProfiles(isolated, "default")).toEqual([
+      { main: "openai/gpt-6", subagents: "openai/mini" },
+    ]);
+    expect(getPresetProfiles(isolated, "backup")?.map((profile) => profile.main)).toEqual([
+      "openai/gpt-6",
+      "anthropic/claude-4",
+    ]);
+    await host.runCommand("preset use default", ctx);
     const copyExisting = await host.runCommand("preset copy default backup", ctx);
     expect(copyExisting[0]?.level).toBe("warning");
     const copyMissing = await host.runCommand("preset copy missing other", ctx);
