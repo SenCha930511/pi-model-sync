@@ -138,6 +138,26 @@ describe("upstream registry resolution", () => {
     expect(selectorKind(ctx, "@smol")).toBe("alias");
     expect(selectorKind(ctx, "openai/*")).toBe("glob");
   });
+
+  test("filters getAll-only registries through hasConfiguredAuth", () => {
+    const reg: ModelRegistryFacade = {
+      getAll: () => [
+        { provider: "openai", id: "gpt-x" },
+        { provider: "anthropic", id: "gpt-x" },
+      ],
+      hasConfiguredAuth: (entry) =>
+        Boolean(entry && typeof entry === "object" && "provider" in entry && entry.provider === "openai"),
+    };
+    const ctx: ExtensionContextLike = {
+      cwd: "/tmp",
+      model: { provider: "google", id: "gpt-6" },
+      modelRegistry: reg,
+    };
+    expect(bareSelectorUnique(ctx, "gpt-x", createRegistrySnapshot(), undefined)).toBe(true);
+    expect(selectorKind(ctx, "anthropic/gpt-x")).toBe("unknown");
+    expect(availableModelIds(ctx)).toEqual(["openai/gpt-x", "gpt-x"]);
+    expect(piSelectorResolvable("anthropic/gpt-x", reg, createRegistrySnapshot())).toBe(false);
+  });
 });
 
 describe("bare id uniqueness", () => {

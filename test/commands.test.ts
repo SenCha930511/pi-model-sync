@@ -207,6 +207,33 @@ describe("profile commands", () => {
     expect(shown[0]?.message).toContain("explore → together/meta-llama/Llama-3.3-70B-Instruct");
   });
 
+  test("show uses the requested model's provider for plugin checks", async () => {
+    const nicobailon = {
+      name: "subagent",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(
+          ["agent", "task", "workflow", "action", "options", "model"].map((prop) => [prop, { type: "string" }]),
+        ),
+      },
+    };
+    const host = createHostHarness({ tools: [nicobailon] });
+    const cwd = makeTempDir();
+    writeGlobal(cwd, { profiles: [{ main: "openai/gpt-6", subagents: { scout: "gpt-x" } }] });
+    const ctx = {
+      cwd,
+      model: { provider: "google", id: "gpt-6" },
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-x" },
+          { provider: "anthropic", id: "gpt-x" },
+        ],
+      },
+    };
+    const shown = await host.runCommand("show openai/gpt-6", ctx);
+    expect(shown[0]?.message).toContain("plugins: nicobailon");
+  });
+
   test("list reports the inactive layer and a broken active file", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();

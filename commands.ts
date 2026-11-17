@@ -418,7 +418,7 @@ function saveConfig(
       : "";
   notify(ctx, `${message}${shadow}`);
   if (host.state.statusVisible) {
-    applyStatus(ctx, host.state, statusText(host.state, projectActiveProfiles(config).activePreset));
+    applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
   }
 }
 
@@ -1069,6 +1069,7 @@ function describeSelector(
   selector: string,
   adapters: SubagentAdapter[] | undefined,
   snapshot: RegistrySnapshot,
+  modelRef: CurrentModelRef | undefined,
 ): string {
   const host = selectorResolvable(ctx, selector, snapshot);
   const hostText =
@@ -1076,7 +1077,7 @@ function describeSelector(
   if (adapters === undefined) return ` (${hostText})`;
   if (adapters.length === 0) return ` (${hostText}; no supported subagent plugin is registered)`;
   const accepted = adapters
-    .filter((adapter) => adapterAcceptsSelector(ctx, selector, adapter, snapshot))
+    .filter((adapter) => adapterAcceptsSelector(ctx, selector, adapter, snapshot, modelRef))
     .map((adapter) => adapter.id);
   if (accepted.length === 0) {
     return ` (${hostText}; no installed plugin accepts this selector)`;
@@ -1133,16 +1134,16 @@ function cmdShow(
     if (!selector) {
       lines.push(`No selector for agent "${agentArg}" under this profile.`);
     } else {
-      lines.push(`  ${agentArg} → ${selector}${describeSelector(ctx, selector, adapters, snapshot)}`);
+      lines.push(`  ${agentArg} → ${selector}${describeSelector(ctx, selector, adapters, snapshot, modelRef)}`);
     }
   } else if (typeof profile.subagents === "string") {
-    lines.push(`  * → ${profile.subagents}${describeSelector(ctx, profile.subagents, adapters, snapshot)}`);
+    lines.push(`  * → ${profile.subagents}${describeSelector(ctx, profile.subagents, adapters, snapshot, modelRef)}`);
   } else {
     const statusCache = new Map<string, string>();
     for (const [agentName, selector] of Object.entries(profile.subagents)) {
       let status = statusCache.get(selector);
       if (status === undefined) {
-        status = describeSelector(ctx, selector, adapters, snapshot);
+        status = describeSelector(ctx, selector, adapters, snapshot, modelRef);
         statusCache.set(selector, status);
       }
       lines.push(`  ${agentName} → ${selector}${status}`);
@@ -1197,7 +1198,9 @@ function cmdUseSession(
 ): void {
   if (name === "off") {
     delete host.state.presetOverride;
-    applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+    if (host.state.statusVisible) {
+      applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+    }
     notify(ctx, "Session preset override cleared.");
     return;
   }
@@ -1222,7 +1225,9 @@ function cmdUseSession(
   }
   host.state.presetOverride = name;
   host.state.paused = false;
-  applyStatus(ctx, host.state, statusText(host.state, projectActiveProfiles(layer.config).activePreset));
+  if (host.state.statusVisible) {
+    applyStatus(ctx, host.state, statusText(host.state, projectActiveProfiles(layer.config).activePreset));
+  }
   notify(
     ctx,
     `Session preset: ${name} (not saved; ${profiles.length} profile${profiles.length === 1 ? "" : "s"}; target: ${target}).`,
@@ -1231,13 +1236,17 @@ function cmdUseSession(
 
 function cmdPause(ctx: ExtensionContextLike, host: CommandHost): void {
   host.state.paused = true;
-  applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+  if (host.state.statusVisible) {
+    applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+  }
   notify(ctx, "Routing paused for this session. Run /model-sync resume to re-enable it.");
 }
 
 function cmdResume(ctx: ExtensionContextLike, host: CommandHost): void {
   host.state.paused = false;
-  applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+  if (host.state.statusVisible) {
+    applyStatus(ctx, host.state, statusText(host.state, diskActivePreset(ctx)));
+  }
   notify(
     ctx,
     host.state.presetOverride === undefined
@@ -1274,6 +1283,13 @@ function cmdLog(ctx: ExtensionContextLike, host: CommandHost, action?: string): 
 }
 
 // ── doctor and init ─────────────────────────────────────────────
+function shadowProbe(main: string): CurrentModelRef | undefined {
+  if (!main.includes("*")) return undefined;
+  const parsed = parseSelector(main.replace(/\*+/g, "probe"));
+  if (!parsed || parsed.kind !== "reference") return undefined;
+  return selectorRefs(parsed)[0];
+}
+
 
 function checkProfiles(
   ctx: ExtensionContextLike,
@@ -1287,15 +1303,22 @@ function checkProfiles(
     const profile = profiles[index];
     if (!profile) continue;
     const parsed = parseSelector(profile.main);
-    if (parsed && parsed.kind === "reference") {
-      for (const ref of selectorRefs(parsed)) {
-        const earlier = findProfile({ profiles: profiles.slice(0, index) }, ref);
-        if (earlier) {
-          issues.add(
-            `Preset "${preset}" profile "${profile.main}" is shadowed by earlier profile "${earlier.main}".`,
-          );
-          break;
-        }
+    const isGlob = parsed?.kind === "glob";
+    const refs =
+      parsed?.kind === "reference"
+        ? selectorRefs(parsed)
+        : isGlob
+          ? [shadowProbe(profile.main)].filter(
+              (ref): ref is CurrentModelRef => ref !== undefined,
+            )
+          : [];
+    for (const ref of refs) {
+      const earlier = findProfile({ profiles: profiles.slice(0, index) }, ref);
+      if (earlier) {
+        issues.add(
+          `Preset "${preset}" profile "${profile.main}" ${isGlob ? "may be shadowed by" : "is shadowed by"} earlier profile "${earlier.main}".`,
+        );
+        break;
       }
     }
     const selectors =
@@ -1310,7 +1333,7 @@ function checkProfiles(
         );
         if (!accepted) {
           issues.add(
-            `Preset "${preset}" selector "${selector}" is not accepted by any installed plugin (${installed
+            `Preset "${preset}" selector "${selector}" is not accepted by any installed plugin for tool calls (${installed
               .map((adapter) => adapter.id)
               .join(", ")}).`,
           );
@@ -1355,28 +1378,30 @@ function cmdDoctor(ctx: ExtensionContextLike, host: CommandHost): void {
       lines.push(`${layer.label} (${layer.path}): no file`);
       continue;
     }
+    const layerIssues = new Set<string>();
     if (read.error) {
       lines.push(`${layer.label} (${layer.path}): error`);
-      issues.add(read.error);
-      continue;
+      layerIssues.add(read.error);
+    } else {
+      const names = presetNames(read.config);
+      const profileCount = names.reduce(
+        (total, name) => total + (getPresetProfiles(read.config, name)?.length ?? 0),
+        0,
+      );
+      lines.push(
+        `${layer.label} (${layer.path}): ${names.length} preset${names.length === 1 ? "" : "s"}, ${profileCount} profile${profileCount === 1 ? "" : "s"}`,
+      );
+      for (const warning of read.warnings) layerIssues.add(warning);
+      for (const name of names) {
+        checkProfiles(ctx, name, getPresetProfiles(read.config, name) ?? [], installed, snapshot, layerIssues);
+      }
     }
-    const names = presetNames(read.config);
-    const profileCount = names.reduce(
-      (total, name) => total + (getPresetProfiles(read.config, name)?.length ?? 0),
-      0,
-    );
-    lines.push(
-      `${layer.label} (${layer.path}): ${names.length} preset${names.length === 1 ? "" : "s"}, ${profileCount} profile${profileCount === 1 ? "" : "s"}`,
-    );
-    for (const warning of read.warnings) issues.add(warning);
-    for (const name of names) {
-      checkProfiles(ctx, name, getPresetProfiles(read.config, name) ?? [], installed, snapshot, issues);
-    }
+    for (const issue of layerIssues) issues.add(`[${layer.label}] ${issue}`);
   }
   if (host.state.presetOverride !== undefined) {
     const activeRead = readLayer(active.path);
     if (activeRead.exists && getPresetProfiles(activeRead.config, host.state.presetOverride) === undefined) {
-      issues.add(`Session preset "${host.state.presetOverride}" does not exist in the active layer.`);
+      issues.add(`[${active.layer}] Session preset "${host.state.presetOverride}" does not exist in the active layer.`);
     }
   }
   if (issues.size === 0) {
@@ -1391,6 +1416,14 @@ function cmdDoctor(ctx: ExtensionContextLike, host: CommandHost): void {
 
 function cmdInit(ctx: ExtensionContextLike, target: string, host: CommandHost): void {
   const layer = readLayer(target);
+  if (layer.error) {
+    notify(
+      ctx,
+      `Config already exists at ${target} but cannot be parsed: ${layer.error}\nRepair or delete it before running /model-sync init.`,
+      "error",
+    );
+    return;
+  }
   if (layer.exists) {
     notify(
       ctx,
