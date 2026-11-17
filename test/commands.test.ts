@@ -144,6 +144,17 @@ describe("profile commands", () => {
     expect(missing[0]?.message).toContain('no entry for agent "missing"');
   });
 
+  test("remove rejects a blank agent argument instead of deleting the profile", async () => {
+    const host = createHostHarness();
+    const cwd = makeTempDir();
+    const ctx = modelCtx(cwd);
+    await host.runCommand("add openai/gpt-6 openai/mini", ctx);
+    const blank = await host.runCommand('remove openai/gpt-6 ""', ctx);
+    expect(blank[0]?.level).toBe("warning");
+    expect(blank[0]?.message).toContain("Usage: /model-sync remove <main> [agent]");
+    expect(projectActiveProfiles(readGlobal(cwd)).profiles).toHaveLength(1);
+  });
+
   test("move handles bottom, down, edges, single profiles, and invalid positions", async () => {
     const host = createHostHarness();
     const cwd = makeTempDir();

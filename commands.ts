@@ -243,7 +243,7 @@ async function handleCommand(
     }
     case "remove": {
       const [main, agent] = rest;
-      if (rest.length < 1 || rest.length > 2 || !main) {
+      if (rest.length < 1 || rest.length > 2 || !main || (agent !== undefined && !agent)) {
         notify(ctx, "Usage: /model-sync remove <main> [agent]", "warning");
         return;
       }
@@ -598,7 +598,7 @@ function cmdRemove(
   }
   const profile = profiles[index];
   if (!profile) return;
-  if (agent) {
+  if (agent !== undefined) {
     if (typeof profile.subagents === "string") {
       notify(ctx, `This profile has a single default model; use /model-sync remove ${main}`, "warning");
       return;
