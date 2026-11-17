@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectActiveProfiles, readConfig, readLayer, resolveActiveLayer, writeConfig } from "../config";
@@ -47,6 +47,30 @@ describe("POSIX filesystem invariants", () => {
     expect(resolveActiveLayer(cwd).layer).toBe("global");
     expect(readLayer(dirAtProjectConfig).exists).toBe(false);
     expect(readConfig(cwd).profiles).toEqual([]);
+  });
+
+  test("an unstatable project layer fails closed instead of falling back to global", () => {
+    if (process.getuid?.() === 0) return;
+    const cwd = makeTempDir("cwd-");
+    const agentDir = process.env.PI_CODING_AGENT_DIR ?? "";
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      path.join(agentDir, "pi-model-sync.json"),
+      JSON.stringify({ profiles: [{ main: "*", subagents: "openai/global" }] }),
+    );
+    mkdirSync(path.join(cwd, ".omp"));
+    writeFileSync(
+      path.join(cwd, ".omp", "pi-model-sync.json"),
+      JSON.stringify({ profiles: [{ main: "*", subagents: "openai/project" }] }),
+    );
+    chmodSync(path.join(cwd, ".omp"), 0o000);
+    readonlyDirs.push(path.join(cwd, ".omp"));
+
+    expect(resolveActiveLayer(cwd).layer).toBe("project");
+    expect(readConfig(cwd).profiles).toHaveLength(0);
+
+    chmodSync(path.join(cwd, ".omp"), 0o755);
+    expect(readConfig(cwd).profiles[0]?.subagents).toBe("openai/project");
   });
 
   test("writeConfig cleans up temporary file when target directory is read-only", () => {
