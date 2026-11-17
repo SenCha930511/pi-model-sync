@@ -177,7 +177,8 @@ describe("profile commands", () => {
     const ctx = modelCtx(cwd);
     await host.runCommand("add openai/gpt-6 openai/mini", ctx);
     const single = await host.runCommand("move openai/gpt-6 top", ctx);
-    expect(single[0]?.message).toContain("already in that position");
+    expect(single[0]?.level).toBe("warning");
+    expect(single[0]?.message).toContain("already at the top");
 
     await host.runCommand("add anthropic/* anthropic/haiku", ctx);
     const bottom = await host.runCommand("move openai/gpt-6 bottom", ctx);
@@ -185,6 +186,9 @@ describe("profile commands", () => {
     const down = await host.runCommand("move openai/gpt-6 down", ctx);
     expect(down[0]?.level).toBe("warning");
     expect(down[0]?.message).toContain("already at the bottom");
+    const bottomAgain = await host.runCommand("move openai/gpt-6 bottom", ctx);
+    expect(bottomAgain[0]?.level).toBe("warning");
+    expect(bottomAgain[0]?.message).toContain("already at the bottom");
 
     const invalid = await host.runCommand("move openai/gpt-6 sideways", ctx);
     expect(invalid[0]?.level).toBe("warning");

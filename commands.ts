@@ -656,13 +656,9 @@ function cmdMove(
   else if (position === "bottom") targetIndex = profiles.length - 1;
   else if (position === "up") targetIndex = index - 1;
   else targetIndex = index + 1;
-  if (targetIndex < 0 || targetIndex >= profiles.length) {
-    const edge = position === "up" ? "top" : "bottom";
+  if (targetIndex < 0 || targetIndex >= profiles.length || targetIndex === index) {
+    const edge = position === "up" || position === "top" ? "top" : "bottom";
     notify(ctx, `Profile ${main} is already at the ${edge} of the active preset (target: ${target}).`, "warning");
-    return;
-  }
-  if (targetIndex === index) {
-    notify(ctx, `Profile ${main} is already in that position (target: ${target}).`);
     return;
   }
   const removed = profiles.splice(index, 1);
